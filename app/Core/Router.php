@@ -5,7 +5,9 @@ namespace App\Core;
 use App\Controllers\ApiController;
 use App\Controllers\AuthController;
 use App\Controllers\DashboardController;
+use App\Controllers\DeployController;
 use App\Controllers\ProjectController;
+use App\Controllers\VersionController;
 use App\Middleware\AuthMiddleware;
 
 final class Router
@@ -55,6 +57,35 @@ final class Router
             return;
         }
 
+
+        $versionController = new VersionController();
+        if (preg_match('#^/projects/(\d+)/versions$#', $path, $matches) && $method === 'POST') {
+            $versionController->store($request, (int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/versions/(\d+)$#', $path, $matches) && ($method === 'POST' || $method === 'PUT' || $method === 'PATCH')) {
+            $versionController->update($request, (int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/versions/(\d+)/deactivate$#', $path, $matches) && $method === 'POST') {
+            $versionController->deactivate((int) $matches[1]);
+            return;
+        }
+
+        $deployController = new DeployController();
+        if (preg_match('#^/projects/(\d+)/deploy/latest$#', $path, $matches) && $method === 'POST') {
+            $deployController->latest((int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/projects/(\d+)/deploy/stable$#', $path, $matches) && $method === 'POST') {
+            $deployController->stable((int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/projects/(\d+)/deploy/versions/(\d+)$#', $path, $matches) && $method === 'POST') {
+            $deployController->version((int) $matches[1], (int) $matches[2]);
+            return;
+        }
+
         $api = new ApiController();
         if ($path === '/api/db/status' && $method === 'GET') {
             $api->dbStatus();
@@ -82,6 +113,22 @@ final class Router
         }
         if (preg_match('#^/api/versions/(\d+)/stable$#', $path, $matches) && $method === 'POST') {
             $api->markStableVersion((int) $matches[1]);
+            return;
+        }
+        if ($path === '/api/deploy/status' && $method === 'GET') {
+            $api->deployStatus();
+            return;
+        }
+        if (preg_match('#^/api/projects/(\d+)/deploy/latest$#', $path, $matches) && $method === 'POST') {
+            $api->deployLatest((int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/api/projects/(\d+)/deploy/stable$#', $path, $matches) && $method === 'POST') {
+            $api->deployStable((int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/api/projects/(\d+)/deploy/versions/(\d+)$#', $path, $matches) && $method === 'POST') {
+            $api->deployVersion((int) $matches[1], (int) $matches[2]);
             return;
         }
         if (preg_match('#^/api/projects/(\d+)/histories$#', $path, $matches)) {

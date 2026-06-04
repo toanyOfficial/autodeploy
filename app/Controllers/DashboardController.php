@@ -6,6 +6,7 @@ use App\Core\Response;
 use App\Repositories\DeployHistoryRepository;
 use App\Repositories\DeployProjectRepository;
 use App\Repositories\DeployVersionRepository;
+use App\Services\DeployService;
 
 final class DashboardController
 {
@@ -14,6 +15,7 @@ final class DashboardController
         $projectRepository = new DeployProjectRepository();
         $versionRepository = new DeployVersionRepository();
         $historyRepository = new DeployHistoryRepository();
+        $deployService = new DeployService();
 
         $projects = array_map(function (array $project) use ($versionRepository, $historyRepository): array {
             $project['recent_versions'] = $versionRepository->byProject((int) $project['id'], 3);
@@ -21,6 +23,13 @@ final class DashboardController
             return $project;
         }, $projectRepository->all(true));
 
-        Response::view('projects/index', ['projects' => $projects]);
+        $flashError = $_SESSION['flash_error'] ?? null;
+        unset($_SESSION['flash_error']);
+
+        Response::view('projects/index', [
+            'projects' => $projects,
+            'isDeploying' => $deployService->isDeploying(),
+            'flashError' => $flashError,
+        ]);
     }
 }

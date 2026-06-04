@@ -8,6 +8,7 @@ use App\Core\Response;
 use App\Repositories\DeployHistoryRepository;
 use App\Repositories\DeployProjectRepository;
 use App\Repositories\DeployVersionRepository;
+use App\Services\DeployService;
 
 final class ApiController
 {
@@ -141,5 +142,34 @@ final class ApiController
         }
 
         $history === null ? Response::json(['message' => 'Deploy history not found.'], 404) : Response::json(['data' => $history]);
+    }
+
+    public function deployStatus(): void
+    {
+        Response::json(['deploying' => (new DeployService())->isDeploying()]);
+    }
+
+    public function deployLatest(int $projectId): void
+    {
+        $this->runDeploy(static fn (DeployService $service): array => $service->deployLatest($projectId));
+    }
+
+    public function deployStable(int $projectId): void
+    {
+        $this->runDeploy(static fn (DeployService $service): array => $service->deployStable($projectId));
+    }
+
+    public function deployVersion(int $projectId, int $versionId): void
+    {
+        $this->runDeploy(static fn (DeployService $service): array => $service->deployVersion($projectId, $versionId));
+    }
+
+    private function runDeploy(callable $callback): void
+    {
+        try {
+            Response::json(['data' => $callback(new DeployService())], 201);
+        } catch (\RuntimeException $exception) {
+            Response::json(['message' => $exception->getMessage()], 409);
+        }
     }
 }
