@@ -30,5 +30,6 @@
             </form>
         </section>
     </main>
+    <script src="/assets/js/projects.js"></script>
 </body>
 </html>

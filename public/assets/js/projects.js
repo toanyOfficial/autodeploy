@@ -32,3 +32,39 @@ document.querySelectorAll('[data-copy-report]').forEach((button) => {
     button.textContent = '복사 완료';
   });
 });
+
+(() => {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  const month = new Date().getMonth() + 1;
+  const season = month >= 3 && month <= 5 ? 'spring'
+    : month >= 6 && month <= 8 ? 'summer'
+      : month >= 9 && month <= 11 ? 'autumn'
+        : 'winter';
+
+  document.body.dataset.season = season;
+
+  const layer = document.createElement('div');
+  layer.className = 'seasonal-layer';
+  layer.setAttribute('aria-hidden', 'true');
+
+  const symbols = {
+    spring: ['🌸', '♡', '❀'],
+    summer: ['✦', '✧', '•'],
+    autumn: ['🍂', '🍁', '❦'],
+    winter: ['❄', '✧', '❅'],
+  };
+
+  const count = window.innerWidth < 640 ? 12 : 22;
+  for (let index = 0; index < count; index += 1) {
+    const particle = document.createElement('span');
+    particle.textContent = symbols[season][index % symbols[season].length];
+    particle.style.setProperty('--x', `${Math.random() * 100}vw`);
+    particle.style.setProperty('--delay', `${Math.random() * -18}s`);
+    particle.style.setProperty('--duration', `${14 + Math.random() * 12}s`);
+    particle.style.setProperty('--size', `${0.65 + Math.random() * 0.85}rem`);
+    layer.appendChild(particle);
+  }
+
+  document.body.appendChild(layer);
+})();

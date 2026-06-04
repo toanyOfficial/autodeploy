@@ -416,3 +416,324 @@ button:disabled {
   color: var(--text);
   background: #fff;
 }
+
+/* STEP 7 final princess UI polish */
+:root {
+  --rose-glow: rgba(255, 111, 181, 0.34);
+  --gold: #f4b94f;
+  --glass: rgba(255, 255, 255, 0.78);
+}
+
+html,
+body {
+  overflow-x: hidden;
+}
+
+body {
+  background:
+    radial-gradient(circle at 18% 10%, rgba(255, 255, 255, 0.95), transparent 22%),
+    radial-gradient(circle at 85% 12%, rgba(255, 214, 235, 0.95), transparent 26%),
+    radial-gradient(circle at 50% 92%, rgba(255, 246, 214, 0.9), transparent 30%),
+    linear-gradient(135deg, #fff8fd 0%, #ffe3f2 42%, #fff4cf 100%);
+}
+
+
+.princess-page::before,
+.princess-page::after {
+  z-index: -2;
+  text-shadow: 0 18px 38px rgba(255, 90, 168, 0.18);
+}
+
+.topbar {
+  position: relative;
+  margin: 20px clamp(14px, 4vw, 42px) 0;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 34px;
+  padding: clamp(22px, 4vw, 36px);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(255, 229, 242, 0.72));
+  box-shadow: 0 24px 70px rgba(255, 90, 168, 0.2);
+  backdrop-filter: blur(16px);
+}
+
+.topbar h1,
+.login-card h1 {
+  margin-bottom: 8px;
+  letter-spacing: -0.045em;
+  font-size: clamp(2rem, 5vw, 4rem);
+  line-height: 1.02;
+  background: linear-gradient(135deg, #c51672, #ff5aa8 48%, #f4b94f);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.topbar::after {
+  content: "✦ Princess Deploy Room ✦";
+  position: absolute;
+  right: clamp(18px, 4vw, 36px);
+  bottom: -14px;
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #ff6fb5, #ffc0df);
+  font-size: 0.78rem;
+  font-weight: 900;
+  box-shadow: 0 12px 28px rgba(255, 90, 168, 0.25);
+}
+
+.dashboard-layout {
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.login-card,
+.panel,
+.project-card,
+.report-card {
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 247, 252, 0.82)),
+    var(--glass);
+  box-shadow:
+    0 24px 70px rgba(255, 90, 168, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.project-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 36px;
+  padding: clamp(20px, 3vw, 30px);
+}
+
+.project-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 8px;
+  background: linear-gradient(90deg, #ff6fb5, #ffd1e6, #f4b94f);
+}
+
+.card-head h2 {
+  margin-bottom: 0;
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
+  letter-spacing: -0.035em;
+}
+
+.badge,
+.mini-badge,
+.stable-badge {
+  box-shadow: 0 10px 22px rgba(255, 90, 168, 0.18);
+}
+
+.project-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.project-meta div {
+  border: 1px solid rgba(255, 196, 223, 0.72);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.deploy-placeholder {
+  position: relative;
+  margin: 22px 0;
+  border: 1px solid rgba(255, 190, 222, 0.95);
+  border-radius: 30px;
+  padding: clamp(18px, 3vw, 26px);
+  background:
+    radial-gradient(circle at 92% 10%, rgba(255, 255, 255, 0.96), transparent 32%),
+    linear-gradient(135deg, #fff4fb, #ffe0f0 58%, #fff3c7);
+  box-shadow: 0 22px 50px rgba(255, 90, 168, 0.18);
+}
+
+.deploy-placeholder::before {
+  content: "현재 운영중 ✨";
+  width: fit-content;
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: #fff;
+  background: linear-gradient(135deg, #ff5aa8, #f4b94f);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.deploy-placeholder > div:not(.deploy-actions) {
+  border-radius: 20px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.deploy-placeholder strong {
+  display: block;
+  margin-top: 4px;
+  color: #b81568;
+  font-size: clamp(1rem, 2.1vw, 1.3rem);
+  overflow-wrap: anywhere;
+}
+
+.deploy-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.deploy-actions form:nth-child(-n + 2) button {
+  min-height: 74px;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  font-size: clamp(1.02rem, 2.1vw, 1.28rem);
+  letter-spacing: -0.02em;
+  box-shadow: 0 18px 34px rgba(255, 90, 168, 0.28);
+}
+
+.deploy-actions form:first-child button {
+  color: #fff;
+  background: linear-gradient(135deg, #ff3f99, #ff88c8 55%, #ffc2df);
+}
+
+.deploy-actions form:nth-child(2) button {
+  color: #9b3b00;
+  background: linear-gradient(135deg, #fff5c2, #ffc75f 58%, #ff9ecf);
+}
+
+.deploy-actions > button {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  color: #fff;
+  background: #ffb3d5;
+}
+
+.version-panel,
+.recent-versions,
+.recent-histories {
+  border: 1px solid rgba(255, 196, 223, 0.72);
+  border-radius: 26px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.recent-versions li,
+.recent-histories li {
+  border: 1px solid rgba(255, 226, 242, 0.95);
+  box-shadow: 0 10px 24px rgba(255, 90, 168, 0.08);
+}
+
+.recent-versions li strong,
+.recent-histories li strong {
+  color: #c51672;
+}
+
+.primary-button,
+.secondary-button,
+.ghost-button,
+.danger-button,
+.link-button {
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.ghost-button:hover,
+.danger-button:hover,
+.link-button:hover {
+  transform: translateY(-1px);
+  filter: saturate(1.08);
+}
+
+.seasonal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.seasonal-layer span {
+  position: absolute;
+  top: -10vh;
+  left: var(--x);
+  color: rgba(255, 90, 168, 0.56);
+  font-size: var(--size);
+  line-height: 1;
+  animation: seasonal-fall var(--duration) linear infinite;
+  animation-delay: var(--delay);
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.92);
+}
+
+body[data-season="summer"] .seasonal-layer span {
+  color: rgba(255, 190, 80, 0.72);
+  animation-name: summer-sparkle;
+}
+
+body[data-season="autumn"] .seasonal-layer span {
+  color: rgba(197, 103, 35, 0.55);
+}
+
+body[data-season="winter"] .seasonal-layer span {
+  color: rgba(151, 204, 255, 0.72);
+}
+
+@keyframes seasonal-fall {
+  0% { transform: translate3d(0, -8vh, 0) rotate(0deg); opacity: 0; }
+  12% { opacity: 1; }
+  100% { transform: translate3d(42px, 112vh, 0) rotate(320deg); opacity: 0; }
+}
+
+@keyframes summer-sparkle {
+  0% { transform: translate3d(0, 105vh, 0) scale(0.8); opacity: 0; }
+  18% { opacity: 1; }
+  50% { transform: translate3d(20px, 48vh, 0) scale(1.18); opacity: 0.95; }
+  100% { transform: translate3d(-18px, -12vh, 0) scale(0.74); opacity: 0; }
+}
+
+body > :not(.seasonal-layer) {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .seasonal-layer { display: none; }
+}
+
+@media (max-width: 880px) {
+  .topbar { margin-inline: 14px; }
+  .project-meta { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .dashboard-layout {
+    gap: 18px;
+    padding: 18px 12px 40px;
+  }
+
+  .project-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .topbar::after { display: none; }
+
+  .deploy-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .deploy-actions form:nth-child(-n + 2) button {
+    min-height: 64px;
+  }
+
+  .card-head,
+  .section-head,
+  .version-line {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .login-shell { padding: 14px; }
+  .login-card { border-radius: 28px; }
+}
