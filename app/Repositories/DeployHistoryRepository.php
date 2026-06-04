@@ -8,12 +8,12 @@ final class DeployHistoryRepository extends BaseRepository
 {
     public function byProject(int $projectId, ?int $limit = null): array
     {
-        $sql = 'SELECT h.*, v.version_name, p.project_name'
+        $sql = 'SELECT h.*, v.version_name, p.project_name, p.project_key'
             . ' FROM ' . DeployHistory::TABLE . ' h'
             . ' LEFT JOIN deploy_version v ON v.id = h.deploy_version_id'
             . ' INNER JOIN deploy_project p ON p.id = h.project_id'
             . ' WHERE h.project_id = :project_id'
-            . ' ORDER BY h.created_at DESC, h.id DESC';
+            . ' ORDER BY COALESCE(h.ended_at, h.started_at, h.created_at) DESC, h.id DESC';
 
         if ($limit !== null) {
             $sql .= ' LIMIT ' . (int) $limit;
@@ -37,7 +37,7 @@ final class DeployHistoryRepository extends BaseRepository
     public function hasRunning(): bool
     {
         $row = $this->fetchOne(
-            "SELECT id FROM " . DeployHistory::TABLE . " WHERE deploy_status = \'running\' ORDER BY id DESC LIMIT 1"
+            "SELECT id FROM " . DeployHistory::TABLE . " WHERE deploy_status = 'running' ORDER BY id DESC LIMIT 1"
         );
 
         return $row !== null;
@@ -46,6 +46,19 @@ final class DeployHistoryRepository extends BaseRepository
     public function find(int $id): ?array
     {
         return $this->fetchOne('SELECT * FROM ' . DeployHistory::TABLE . ' WHERE id = :id', ['id' => $id]);
+    }
+
+
+    public function findWithProject(int $id): ?array
+    {
+        return $this->fetchOne(
+            'SELECT h.*, v.version_name, p.project_name, p.project_key'
+            . ' FROM ' . DeployHistory::TABLE . ' h'
+            . ' LEFT JOIN deploy_version v ON v.id = h.deploy_version_id'
+            . ' INNER JOIN deploy_project p ON p.id = h.project_id'
+            . ' WHERE h.id = :id',
+            ['id' => $id]
+        );
     }
 
     public function create(int $projectId, array $data): array

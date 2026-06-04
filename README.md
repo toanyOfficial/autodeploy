@@ -34,3 +34,13 @@ php scripts/test_db_connection.php
 - `GET /api/deploy/status`: 전역 배포 진행 여부를 확인합니다.
 
 배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료합니다.
+
+## 배포 이력 및 리포트
+
+- 리포트는 `.env`의 `REPORT_DIR` 하위에 프로젝트 `project_key`별 폴더로 저장합니다. 예: `${REPORT_DIR}/dandorak_web/`
+- 리포트 파일명은 `YYYYMMDD_HHMMSS.txt` 형식을 사용합니다.
+- `deploy_history.report_file`에는 생성된 txt 리포트의 전체 경로를 저장합니다.
+- 프로젝트별 리포트는 최근 5건만 유지하고, 6건 이상이면 가장 오래된 파일을 삭제합니다.
+- `GET /api/projects/{projectId}/histories`는 최근 배포 이력 5건을 반환합니다.
+- `GET /api/reports/{historyId}`는 해당 배포 이력의 리포트 내용을 반환합니다.
+- `GET /reports/{historyId}`는 리포트 상세 화면과 전체 복사 버튼을 제공합니다.

@@ -377,3 +377,42 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.65;
 }
+
+.recent-histories ul {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-histories li {
+  display: grid;
+  gap: 6px;
+  border-radius: 16px;
+  padding: 12px;
+  background: #fff;
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.report-layout {
+  padding: 24px clamp(18px, 5vw, 56px) 56px;
+}
+
+.report-card {
+  max-width: 1100px;
+}
+
+.report-content {
+  overflow: auto;
+  white-space: pre-wrap;
+  border-radius: 18px;
+  padding: 16px;
+  color: var(--text);
+  background: #fff;
+}

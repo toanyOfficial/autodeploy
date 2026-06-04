@@ -20,6 +20,7 @@ final class DashboardController
         $projects = array_map(function (array $project) use ($versionRepository, $historyRepository): array {
             $project['recent_versions'] = $versionRepository->byProject((int) $project['id'], 3);
             $project['current_deploy'] = $historyRepository->latestSuccessByProject((int) $project['id']);
+            $project['recent_histories'] = $historyRepository->byProject((int) $project['id'], 5);
             return $project;
         }, $projectRepository->all(true));
 

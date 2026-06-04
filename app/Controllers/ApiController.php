@@ -9,6 +9,7 @@ use App\Repositories\DeployHistoryRepository;
 use App\Repositories\DeployProjectRepository;
 use App\Repositories\DeployVersionRepository;
 use App\Services\DeployService;
+use App\Services\ReportService;
 
 final class ApiController
 {
@@ -115,7 +116,7 @@ final class ApiController
         $repository = new DeployHistoryRepository();
 
         if ($request->method() === 'GET') {
-            Response::json(['data' => $repository->byProject($projectId)]);
+            Response::json(['data' => $repository->byProject($projectId, 5)]);
             return;
         }
 
@@ -142,6 +143,22 @@ final class ApiController
         }
 
         $history === null ? Response::json(['message' => 'Deploy history not found.'], 404) : Response::json(['data' => $history]);
+    }
+
+    public function report(int $historyId): void
+    {
+        $report = (new ReportService())->readByHistoryId($historyId);
+        if ($report === null) {
+            Response::json(['message' => 'Report not found.'], 404);
+            return;
+        }
+
+        if (!empty($report['missing'])) {
+            Response::json(['message' => 'Report file is missing.', 'history' => $report['history']], 404);
+            return;
+        }
+
+        Response::json($report);
     }
 
     public function deployStatus(): void

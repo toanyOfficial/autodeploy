@@ -22,3 +22,13 @@ document.querySelectorAll('[data-latest-deploy-form]').forEach((form) => {
     }
   });
 });
+
+document.querySelectorAll('[data-copy-report]').forEach((button) => {
+  button.addEventListener('click', async () => {
+    const report = document.querySelector('[data-report-content]');
+    if (!report) return;
+
+    await navigator.clipboard.writeText(report.textContent);
+    button.textContent = '복사 완료';
+  });
+});

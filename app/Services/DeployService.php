@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Config\Env;
 use App\Repositories\DeployHistoryRepository;
 use App\Repositories\DeployProjectRepository;
 use App\Repositories\DeployVersionRepository;
@@ -13,7 +12,10 @@ final class DeployService
     private DeployVersionRepository $versions;
     private DeployHistoryRepository $histories;
     private DeploymentLock $lock;
-    private array $log = [];
+    private ReportService $reports;
+    private array $stdout = [];
+    private array $stderr = [];
+    private ?string $failureReason = null;
 
     public function __construct()
     {
@@ -21,11 +23,12 @@ final class DeployService
         $this->versions = new DeployVersionRepository();
         $this->histories = new DeployHistoryRepository();
         $this->lock = new DeploymentLock();
+        $this->reports = new ReportService();
     }
 
     public function deployLatest(int $projectId): array
     {
-        return $this->deploy($projectId, null, 'origin/main');
+        return $this->deploy($projectId, null, 'origin/main', '최신버전 빌드');
     }
 
     public function deployStable(int $projectId): array
@@ -35,7 +38,7 @@ final class DeployService
             throw new \RuntimeException('안정화 버전 또는 Commit Hash가 등록되어 있지 않습니다.');
         }
 
-        return $this->deploy($projectId, $stable, (string) $stable['git_commit_hash']);
+        return $this->deploy($projectId, $stable, (string) $stable['git_commit_hash'], '안정화버전 빌드');
     }
 
     public function deployVersion(int $projectId, int $versionId): array
@@ -48,7 +51,7 @@ final class DeployService
             throw new \RuntimeException('선택한 버전에 Commit Hash가 등록되어 있지 않습니다.');
         }
 
-        return $this->deploy($projectId, $version, (string) $version['git_commit_hash']);
+        return $this->deploy($projectId, $version, (string) $version['git_commit_hash'], '특정버전 배포');
     }
 
     public function isDeploying(): bool
@@ -56,15 +59,17 @@ final class DeployService
         return $this->lock->isLocked() || $this->histories->hasRunning();
     }
 
-    private function deploy(int $projectId, ?array $version, string $targetRef): array
+    private function deploy(int $projectId, ?array $version, string $targetRef, string $deployType): array
     {
         if (!$this->lock->acquire()) {
             throw new \RuntimeException('다른 배포가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
         }
 
         $history = null;
-        $reportFile = null;
-        $this->log = [];
+        $project = null;
+        $this->stdout = [];
+        $this->stderr = [];
+        $this->failureReason = null;
 
         try {
             $project = $this->projects->find($projectId);
@@ -83,31 +88,54 @@ final class DeployService
                 'started_at' => $startedAt,
             ]);
 
-            $this->writeLog('배포 시작: ' . $project['project_name'] . ' / 대상: ' . $targetRef);
             $success = $this->runRuntimeFlow($project, $targetRef);
             $deployedCommit = $success ? $this->currentCommit((string) $project['server_path']) : null;
             $status = $success ? 'success' : 'failed';
+            $endedAt = $this->now();
+            $reportFile = $this->reports->createReport($project, [
+                'started_at' => $startedAt,
+                'ended_at' => $endedAt,
+                'deploy_type' => $deployType,
+                'version_name' => $version['version_name'] ?? '최신 main',
+                'requested_commit_hash' => $targetRef,
+                'deployed_commit_hash' => $deployedCommit,
+                'result' => $status,
+                'stdout' => implode(PHP_EOL, $this->stdout),
+                'stderr' => implode(PHP_EOL, $this->stderr),
+                'failure_reason' => $this->failureReason,
+            ]);
 
-            $reportFile = $this->writeReport((int) $project['id'], (int) $history['id']);
             $updated = $this->histories->update((int) $history['id'], [
                 'deploy_status' => $status,
                 'deployed_commit_hash' => $deployedCommit,
-                'ended_at' => $this->now(),
+                'ended_at' => $endedAt,
                 'report_file' => $reportFile,
             ]);
-            $this->pruneReports((int) $project['id']);
+            $this->reports->pruneProjectReports($project);
 
             return $updated ?? $history;
         } catch (\Throwable $throwable) {
-            $this->writeLog('오류: ' . $throwable->getMessage());
-            if ($history !== null) {
-                $reportFile = $this->writeReport($projectId, (int) $history['id']);
+            $this->failureReason = $this->failureReason ?? $throwable->getMessage();
+            if ($history !== null && $project !== null) {
+                $endedAt = $this->now();
+                $reportFile = $this->reports->createReport($project, [
+                    'started_at' => $history['started_at'] ?? '',
+                    'ended_at' => $endedAt,
+                    'deploy_type' => $deployType,
+                    'version_name' => $version['version_name'] ?? '최신 main',
+                    'requested_commit_hash' => $targetRef,
+                    'deployed_commit_hash' => null,
+                    'result' => 'failed',
+                    'stdout' => implode(PHP_EOL, $this->stdout),
+                    'stderr' => implode(PHP_EOL, $this->stderr),
+                    'failure_reason' => $this->failureReason,
+                ]);
                 $this->histories->update((int) $history['id'], [
                     'deploy_status' => 'failed',
-                    'ended_at' => $this->now(),
+                    'ended_at' => $endedAt,
                     'report_file' => $reportFile,
                 ]);
-                $this->pruneReports($projectId);
+                $this->reports->pruneProjectReports($project);
             }
             throw $throwable;
         } finally {
@@ -121,31 +149,36 @@ final class DeployService
         $path = (string) $project['server_path'];
         $port = (int) $project['port'];
 
-        $this->runCommand(['git', 'fetch', '--all'], $path);
-        $this->runCommand(['git', 'reset', '--hard', $targetRef], $path);
+        if (!$this->runCommand(['git', 'fetch', '--all'], $path)) {
+            return $this->fail('git fetch --all 실패');
+        }
+        if (!$this->runCommand(['git', 'reset', '--hard', $targetRef], $path)) {
+            return $this->fail('git reset --hard 실패');
+        }
 
         if ($runtime === 'nextjs_bun') {
             if (!$this->runCommand(['npm', 'ci'], $path)) {
-                $this->writeLog('npm ci 실패: 기존 서비스는 종료하지 않습니다.');
-                return false;
+                return $this->fail('npm ci 실패: 기존 서비스는 종료하지 않습니다.');
             }
             if (!$this->runShellCommand('rm -rf .next', $path)) {
-                $this->writeLog('rm -rf .next 실패: 기존 서비스는 종료하지 않습니다.');
-                return false;
+                return $this->fail('rm -rf .next 실패: 기존 서비스는 종료하지 않습니다.');
             }
             if (!$this->runCommand(['bun', 'run', 'build'], $path)) {
-                $this->writeLog('bun run build 실패: 기존 서비스는 종료하지 않습니다.');
-                return false;
+                return $this->fail('bun run build 실패: 기존 서비스는 종료하지 않습니다.');
             }
 
             $this->stopPort($port);
-            $this->runShellCommand('nohup env PORT=' . $port . ' bun run start -H 0.0.0.0 > app.log 2>&1 &', $path);
+            if (!$this->runShellCommand('nohup env PORT=' . $port . ' bun run start -H 0.0.0.0 > app.log 2>&1 &', $path)) {
+                return $this->fail('bun 서비스 시작 실패');
+            }
             return true;
         }
 
         if ($runtime === 'python_static') {
             $this->stopPort($port);
-            $this->runShellCommand('nohup python3 -m http.server ' . $port . ' --bind 0.0.0.0 > app.log 2>&1 &', $path);
+            if (!$this->runShellCommand('nohup python3 -m http.server ' . $port . ' --bind 0.0.0.0 > app.log 2>&1 &', $path)) {
+                return $this->fail('python_static 서비스 시작 실패');
+            }
             return true;
         }
 
@@ -197,14 +230,14 @@ final class DeployService
 
     private function runShellCommand(string $command, ?string $cwd): bool
     {
-        $this->writeLog('$ ' . $command);
+        $this->stdout[] = '$ ' . $command;
         $descriptor = [
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
         $process = proc_open($command, $descriptor, $pipes, $cwd ?: null);
         if (!is_resource($process)) {
-            $this->writeLog('명령 실행을 시작할 수 없습니다.');
+            $this->failureReason = '명령 실행을 시작할 수 없습니다: ' . $command;
             return false;
         }
 
@@ -214,45 +247,28 @@ final class DeployService
         fclose($pipes[2]);
 
         if ($stdout !== '') {
-            $this->writeLog(trim($stdout));
+            $this->stdout[] = trim($stdout);
         }
         if ($stderr !== '') {
-            $this->writeLog(trim($stderr));
+            $this->stderr[] = '$ ' . $command;
+            $this->stderr[] = trim($stderr);
         }
 
         $code = proc_close($process);
-        $this->writeLog('exit code: ' . $code);
+        $this->stdout[] = 'exit code: ' . $code;
+        if ($code !== 0 && $this->failureReason === null) {
+            $this->failureReason = '명령 실패: ' . $command . ' (exit code ' . $code . ')';
+        }
 
         return $code === 0;
     }
 
-    private function writeLog(string $message): void
+    private function fail(string $reason): bool
     {
-        $this->log[] = '[' . $this->now() . '] ' . $message;
-    }
+        $this->failureReason = $this->failureReason ?? $reason;
+        $this->stderr[] = $reason;
 
-    private function writeReport(int $projectId, int $historyId): string
-    {
-        $reportDir = rtrim(Env::get('REPORT_DIR', __DIR__ . '/../../reports') ?? __DIR__ . '/../../reports', '/');
-        $projectDir = $reportDir . '/project_' . $projectId;
-        if (!is_dir($projectDir)) {
-            mkdir($projectDir, 0755, true);
-        }
-
-        $file = $projectDir . '/deploy_' . $historyId . '_' . date('Ymd_His') . '.txt';
-        file_put_contents($file, implode(PHP_EOL, $this->log) . PHP_EOL);
-
-        return $file;
-    }
-
-    private function pruneReports(int $projectId): void
-    {
-        $reportDir = rtrim(Env::get('REPORT_DIR', __DIR__ . '/../../reports') ?? __DIR__ . '/../../reports', '/');
-        $files = glob($reportDir . '/project_' . $projectId . '/deploy_*.txt') ?: [];
-        usort($files, static fn (string $a, string $b): int => filemtime($b) <=> filemtime($a));
-        foreach (array_slice($files, 5) as $file) {
-            @unlink($file);
-        }
+        return false;
     }
 
     private function now(): string

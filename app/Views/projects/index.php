@@ -144,6 +144,28 @@
                         <?php endif; ?>
                     </section>
 
+
+
+                    <section class="recent-histories">
+                        <h3>최근 배포 이력 5건</h3>
+                        <?php if (empty($project['recent_histories'])): ?>
+                            <p class="muted">배포 이력이 아직 없어요.</p>
+                        <?php else: ?>
+                            <ul>
+                                <?php foreach ($project['recent_histories'] as $history): ?>
+                                    <li>
+                                        <strong><?= htmlspecialchars($history['version_name'] ?? '최신 main', ENT_QUOTES, 'UTF-8') ?></strong>
+                                        <span><?= htmlspecialchars($history['deploy_status'], ENT_QUOTES, 'UTF-8') ?></span>
+                                        <small><?= htmlspecialchars($history['ended_at'] ?? $history['started_at'] ?? $history['created_at'], ENT_QUOTES, 'UTF-8') ?></small>
+                                        <?php if (!empty($history['report_file'])): ?>
+                                            <a class="secondary-button link-button" href="/reports/<?= (int) $history['id'] ?>">리포트 상세 조회</a>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                    </section>
+
                     <div class="card-actions">
                         <button type="button" class="secondary-button" data-edit-project>프로젝트 수정</button>
                         <form method="post" action="/projects/<?= (int) $project['id'] ?>/deactivate">

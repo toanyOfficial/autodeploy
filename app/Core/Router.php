@@ -7,6 +7,7 @@ use App\Controllers\AuthController;
 use App\Controllers\DashboardController;
 use App\Controllers\DeployController;
 use App\Controllers\ProjectController;
+use App\Controllers\ReportController;
 use App\Controllers\VersionController;
 use App\Middleware\AuthMiddleware;
 
@@ -86,6 +87,11 @@ final class Router
             return;
         }
 
+        if (preg_match('#^/reports/(\d+)$#', $path, $matches) && $method === 'GET') {
+            (new ReportController())->show((int) $matches[1]);
+            return;
+        }
+
         $api = new ApiController();
         if ($path === '/api/db/status' && $method === 'GET') {
             $api->dbStatus();
@@ -113,6 +119,10 @@ final class Router
         }
         if (preg_match('#^/api/versions/(\d+)/stable$#', $path, $matches) && $method === 'POST') {
             $api->markStableVersion((int) $matches[1]);
+            return;
+        }
+        if (preg_match('#^/api/reports/(\d+)$#', $path, $matches) && $method === 'GET') {
+            $api->report((int) $matches[1]);
             return;
         }
         if ($path === '/api/deploy/status' && $method === 'GET') {
