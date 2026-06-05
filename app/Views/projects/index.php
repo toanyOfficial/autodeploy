@@ -58,9 +58,6 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
             <h1>공주님의 배포 대시보드</h1>
             <p class="muted">실무자는 프로젝트를 확인하고, 필요한 배포 버튼만 누르면 돼요.</p>
         </div>
-        <form method="post" action="/logout">
-            <button type="submit" class="ghost-button">로그아웃</button>
-        </form>
     </header>
 
     <?php if (!empty($flashError)): ?>
@@ -128,16 +125,21 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                     </section>
 
                     <section class="recent-versions">
-                        <h3>최근 버전 3개</h3>
+                        <h3>최근 버전 5개</h3>
                         <?php if (empty($project['recent_versions'])): ?>
                             <p class="muted">등록된 버전이 아직 없어요.</p>
                         <?php else: ?>
                             <ul>
                                 <?php foreach ($project['recent_versions'] as $version): ?>
                                     <li>
-                                        <div class="version-line">
-                                            <strong><?= htmlspecialchars($version['version_name'], ENT_QUOTES, 'UTF-8') ?></strong>
-                                            <?php if ((int) $version['is_stable'] === 1): ?><span class="stable-badge">안정화</span><?php endif; ?>
+                                        <div class="version-line recent-version-title">
+                                            <div class="version-title-text">
+                                                <strong><?= htmlspecialchars($version['version_name'], ENT_QUOTES, 'UTF-8') ?></strong>
+                                                <?php if ((int) $version['is_stable'] === 1): ?><span class="stable-badge">안정화</span><?php endif; ?>
+                                            </div>
+                                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/versions/<?= (int) $version['id'] ?>" class="recent-version-deploy-form" data-deploy-form>
+                                                <button type="submit" class="secondary-button" <?= $disabled ?>>배포하기</button>
+                                            </form>
                                         </div>
                                         <span><?= htmlspecialchars($version['git_commit_hash'] ?? 'commit 미등록', ENT_QUOTES, 'UTF-8') ?></span>
                                         <small>마지막 배포일시: <?= htmlspecialchars(!empty($version['last_deployed_at']) ? $formatDeployTime($version['last_deployed_at']) : '배포 이력 없음', ENT_QUOTES, 'UTF-8') ?></small>
@@ -148,7 +150,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                     </section>
 
                     <section class="recent-histories">
-                        <h3>최근 배포 이력 5건</h3>
+                        <h3>최근 배포 이력 3건</h3>
                         <?php if (empty($project['recent_histories'])): ?>
                             <p class="muted">배포 이력이 아직 없어요.</p>
                         <?php else: ?>

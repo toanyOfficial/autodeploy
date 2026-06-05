@@ -41,6 +41,7 @@ php scripts/test_db_connection.php
 - 리포트 파일명은 `YYYYMMDD_HHMMSS.txt` 형식을 사용합니다.
 - `deploy_history.report_file`에는 생성된 txt 리포트의 전체 경로를 저장합니다.
 - 프로젝트별 리포트는 최근 5건만 유지하고, 6건 이상이면 가장 오래된 파일을 삭제합니다.
-- `GET /api/projects/{projectId}/histories`는 최근 배포 이력 5건을 반환합니다.
-- `GET /api/reports/{historyId}`는 해당 배포 이력의 리포트 내용을 반환합니다.
-- `GET /reports/{historyId}`는 리포트 상세 화면과 전체 복사 버튼을 제공합니다.
+- `GET /api/projects/{projectId}/histories`는 최근 배포 이력 3건을 반환합니다.
+- `GET /api/reports/{historyId}`는 해당 배포 이력의 리포트 내용과 감지된 대표 실패 케이스를 반환합니다.
+- `POST /api/reports/{historyId}/operation`은 `sync_dependencies`, `check_git_auth`, `fix_permissions`, `kill_port`, `clean_next_build`, `copy_report` 중 whitelist된 리포트 복구/확인 operation만 실행합니다.
+- `GET /reports/{historyId}`는 리포트 상세 화면, 전체 복사 버튼, 대표 실패 케이스 안내/복구 액션 카드를 제공합니다.

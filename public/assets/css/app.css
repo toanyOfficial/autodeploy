@@ -246,6 +246,30 @@ button {
   overflow-wrap: anywhere;
 }
 
+.recent-version-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.version-title-text {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.recent-version-deploy-form {
+  flex: 0 0 auto;
+}
+
+.recent-version-deploy-form button {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
 .card-actions { margin-top: 18px; }
 .edit-form { margin-top: 16px; }
 
@@ -779,6 +803,13 @@ body > :not(.seasonal-particles) {
   .login-card { border-radius: 28px; }
 }
 
+@media (max-width: 620px) {
+  .recent-versions .recent-version-title {
+    align-items: center;
+    flex-direction: row;
+  }
+}
+
 /* Operator-first dashboard adjustments */
 .operator-dashboard {
   grid-template-columns: 1fr;
@@ -1026,7 +1057,8 @@ body > :not(.seasonal-particles) {
 
 /* Deployment request/response feedback */
 .deploy-feedback,
-.card-deploy-status {
+.card-deploy-status,
+.report-operation-result {
   border: 1px solid rgba(255, 196, 223, 0.9);
   border-radius: 22px;
   padding: 14px 18px;
@@ -1045,19 +1077,22 @@ body > :not(.seasonal-particles) {
 }
 
 .deploy-feedback[data-status="running"],
-.card-deploy-status[data-status="running"] {
+.card-deploy-status[data-status="running"],
+.report-operation-result[data-status="running"] {
   color: #a45c00;
   background: #fff4d3;
 }
 
 .deploy-feedback[data-status="success"],
-.card-deploy-status[data-status="success"] {
+.card-deploy-status[data-status="success"],
+.report-operation-result[data-status="success"] {
   color: #147a52;
   background: #dcfff0;
 }
 
 .deploy-feedback[data-status="failed"],
-.card-deploy-status[data-status="failed"] {
+.card-deploy-status[data-status="failed"],
+.report-operation-result[data-status="failed"] {
   color: #b3165b;
   background: #ffe3ee;
 }
@@ -1065,4 +1100,44 @@ body > :not(.seasonal-particles) {
 .deploy-feedback .link-button {
   margin-left: 10px;
   padding: 7px 12px;
+}
+
+/* Report failure guide/operation card */
+.report-operation-card {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(255, 168, 210, 0.95);
+  border-radius: 24px;
+  padding: 18px;
+  background: rgba(255, 247, 252, 0.95);
+  box-shadow: 0 18px 40px rgba(255, 90, 168, 0.14);
+}
+
+.report-operation-card h2 {
+  margin: 4px 0 8px;
+  color: #b81568;
+  font-size: clamp(1.2rem, 2.4vw, 1.55rem);
+}
+
+.report-operation-card p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.65;
+}
+
+.report-operation-card > button {
+  justify-self: start;
+}
+
+.report-operation-result {
+  margin-top: 4px;
+}
+
+.operation-log {
+  margin: 12px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
 }

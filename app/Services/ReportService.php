@@ -8,10 +8,12 @@ use App\Repositories\DeployHistoryRepository;
 final class ReportService
 {
     private DeployHistoryRepository $histories;
+    private ReportFailureAnalyzer $failureAnalyzer;
 
     public function __construct()
     {
         $this->histories = new DeployHistoryRepository();
+        $this->failureAnalyzer = new ReportFailureAnalyzer();
     }
 
     public function createReport(array $project, array $data): string
@@ -46,10 +48,16 @@ final class ReportService
 
         $path = (string) $history['report_file'];
         if (!is_file($path) || !is_readable($path)) {
-            return ['history' => $history, 'content' => null, 'missing' => true];
+            return ['history' => $history, 'content' => null, 'missing' => true, 'failure_case' => null];
         }
 
-        return ['history' => $history, 'content' => file_get_contents($path), 'missing' => false];
+        $content = file_get_contents($path) ?: '';
+        return [
+            'history' => $history,
+            'content' => $content,
+            'missing' => false,
+            'failure_case' => $this->failureAnalyzer->detect($content, $history),
+        ];
     }
 
     private function projectDirectory(array $project): string
