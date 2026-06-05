@@ -10,6 +10,7 @@ use App\Repositories\DeployProjectRepository;
 use App\Repositories\DeployVersionRepository;
 use App\Services\DeployService;
 use App\Services\ReportService;
+use App\Services\ReportOperationService;
 
 final class ApiController
 {
@@ -116,7 +117,7 @@ final class ApiController
         $repository = new DeployHistoryRepository();
 
         if ($request->method() === 'GET') {
-            Response::json(['data' => $repository->byProject($projectId, 5)]);
+            Response::json(['data' => $repository->byProject($projectId, 3)]);
             return;
         }
 
@@ -159,6 +160,26 @@ final class ApiController
         }
 
         Response::json($report);
+    }
+
+
+    public function reportOperation(Request $request, int $historyId): void
+    {
+        if ($request->method() !== 'POST') {
+            Response::json(['message' => 'Method not allowed.'], 405);
+            return;
+        }
+
+        $operation = (string) ($request->input()['operation'] ?? '');
+        try {
+            Response::json((new ReportOperationService())->run($historyId, $operation));
+        } catch (\Throwable $exception) {
+            Response::json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'log' => null,
+            ], 409);
+        }
     }
 
     public function deployStatus(): void

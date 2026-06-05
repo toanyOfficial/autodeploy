@@ -52,7 +52,7 @@ final class DeployHistoryRepository extends BaseRepository
     public function findWithProject(int $id): ?array
     {
         return $this->fetchOne(
-            'SELECT h.*, v.version_name, p.project_name, p.project_key'
+            'SELECT h.*, v.version_name, p.project_name, p.project_key, p.server_path, p.port, p.runtime_type'
             . ' FROM ' . DeployHistory::TABLE . ' h'
             . ' LEFT JOIN deploy_version v ON v.id = h.deploy_version_id'
             . ' INNER JOIN deploy_project p ON p.id = h.project_id'
