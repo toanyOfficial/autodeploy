@@ -246,6 +246,30 @@ button {
   overflow-wrap: anywhere;
 }
 
+.recent-version-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.version-title-text {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.recent-version-deploy-form {
+  flex: 0 0 auto;
+}
+
+.recent-version-deploy-form button {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
 .card-actions { margin-top: 18px; }
 .edit-form { margin-top: 16px; }
 
@@ -777,6 +801,13 @@ body > :not(.seasonal-particles) {
 
   .login-shell { padding: 14px; }
   .login-card { border-radius: 28px; }
+}
+
+@media (max-width: 620px) {
+  .recent-versions .recent-version-title {
+    align-items: center;
+    flex-direction: row;
+  }
 }
 
 /* Operator-first dashboard adjustments */
