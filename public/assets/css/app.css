@@ -902,16 +902,54 @@ body > :not(.seasonal-particles) {
 
 .project-summary {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.9fr) 34px;
-  align-items: center;
-  gap: 16px;
+  gap: 14px;
   cursor: pointer;
+}
+
+.project-summary-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
+  align-items: center;
+  gap: 14px;
 }
 
 .project-summary-title h2 {
   margin: 0;
   font-size: clamp(1.45rem, 3vw, 2.1rem);
   letter-spacing: -0.035em;
+}
+
+.summary-deploy-actions {
+  display: grid;
+  grid-template-columns: 9fr 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.summary-deploy-actions form {
+  min-width: 0;
+}
+
+.summary-deploy-actions button {
+  width: 100%;
+  min-height: 58px;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  border-radius: 20px;
+  box-shadow: 0 14px 28px rgba(255, 90, 168, 0.22);
+  white-space: nowrap;
+}
+
+.summary-deploy-actions form:first-child button {
+  color: #9b3b00;
+  background: linear-gradient(135deg, #fff5c2, #ffc75f 58%, #ff9ecf);
+  font-size: clamp(1rem, 1.9vw, 1.2rem);
+}
+
+.summary-deploy-actions form:nth-child(2) button {
+  padding-inline: 6px;
+  color: #fff;
+  background: linear-gradient(135deg, #ff3f99, #ff88c8 55%, #ffc2df);
+  font-size: 0.82rem;
 }
 
 .project-summary-status {
@@ -936,9 +974,9 @@ body > :not(.seasonal-particles) {
 }
 
 .fold-hint {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
+  display: grid;
+  width: 100%;
+  height: 24px;
   place-items: center;
   border-radius: 999px;
   color: var(--pink-700);
@@ -946,13 +984,20 @@ body > :not(.seasonal-particles) {
   font-size: 1rem;
   font-weight: 900;
   line-height: 1;
-  transition: transform 0.18s ease, color 0.18s ease, background 0.18s ease;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+
+.fold-hint::before {
+  content: "▾";
 }
 
 .project-fold[open] .fold-hint {
   color: #fff;
   background: linear-gradient(135deg, #ff5aa8, #ff9ccc);
-  transform: rotate(180deg);
+}
+
+.project-fold[open] .fold-hint::before {
+  content: "▴";
 }
 
 .project-fold:not([open]) {
@@ -969,8 +1014,12 @@ body > :not(.seasonal-particles) {
 }
 
 @media (max-width: 760px) {
-  .project-summary {
+  .project-summary-top {
     grid-template-columns: 1fr;
+  }
+
+  .summary-deploy-actions {
+    grid-template-columns: minmax(0, 9fr) minmax(44px, 1fr);
   }
 
 }

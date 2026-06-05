@@ -19,6 +19,9 @@ function bindProjectInteractions(root = document) {
 
   root.querySelectorAll('[data-deploy-form]:not([data-bound])').forEach((form) => {
     form.dataset.bound = 'true';
+    form.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
 

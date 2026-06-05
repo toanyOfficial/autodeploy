@@ -86,16 +86,26 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                 <?php $disabled = !empty($isDeploying) ? 'disabled' : ''; ?>
                 <details class="project-card project-fold" data-project-card>
                     <summary class="project-summary">
-                        <div class="project-summary-title">
-                            <p class="project-key"><?= htmlspecialchars($project['project_key'], ENT_QUOTES, 'UTF-8') ?></p>
-                            <h2><?= htmlspecialchars($project['project_name'], ENT_QUOTES, 'UTF-8') ?></h2>
+                        <div class="project-summary-top">
+                            <div class="project-summary-title">
+                                <p class="project-key"><?= htmlspecialchars($project['project_key'], ENT_QUOTES, 'UTF-8') ?></p>
+                                <h2><?= htmlspecialchars($project['project_name'], ENT_QUOTES, 'UTF-8') ?></h2>
+                            </div>
+                            <div class="summary-deploy-actions" aria-label="빠른 배포 실행">
+                                <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/stable" data-deploy-form>
+                                    <button type="submit" <?= $disabled ?>>안정화버전 빌드</button>
+                                </form>
+                                <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form data-deploy-form>
+                                    <button type="submit" <?= $disabled ?> title="최신버전 빌드" aria-label="최신버전 빌드">최신</button>
+                                </form>
+                            </div>
                         </div>
                         <div class="project-summary-status">
                             <span>현재 운영중인 버전은..</span>
                             <strong><?= htmlspecialchars($project['current_deploy']['version_name'] ?? '최신 main 또는 아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
                             <small><?= htmlspecialchars($formatDeployTime($project['current_deploy']['ended_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></small>
                         </div>
-                        <span class="fold-hint" aria-label="프로젝트 카드 펼치기">▾</span>
+                        <span class="fold-hint" aria-label="프로젝트 카드 펼치기"></span>
                     </summary>
 
                     <section class="deploy-placeholder" aria-label="현재 운영중 버전과 배포 실행">
@@ -112,13 +122,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                             <span>마지막 배포일시</span>
                             <strong><?= htmlspecialchars($formatDeployTime($project['current_deploy']['ended_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></strong>
                         </div>
-                        <div class="deploy-actions">
-                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form data-deploy-form>
-                                <button type="submit" <?= $disabled ?>>최신버전 빌드</button>
-                            </form>
-                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/stable" data-deploy-form>
-                                <button type="submit" <?= $disabled ?>>안정화버전 빌드</button>
-                            </form>
+                        <div class="deploy-actions secondary-deploy-actions">
                             <button type="button" disabled>재시작</button>
                         </div>
                     </section>
