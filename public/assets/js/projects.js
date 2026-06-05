@@ -183,6 +183,44 @@ async function runReportOperation(button) {
   }
 }
 
+
+async function runReportOperation(button) {
+  const card = button.closest('[data-report-operation-card]');
+  const resultBox = card?.querySelector('[data-report-operation-result]');
+  const operation = button.dataset.reportOperation;
+  const historyId = button.dataset.historyId;
+
+  if (!operation || !historyId) return;
+
+  button.disabled = true;
+  showDeployFeedback(resultBox, 'running', '작업을 실행 중입니다. 잠시만 기다려주세요.');
+
+  try {
+    const response = await fetch(`/api/reports/${encodeURIComponent(historyId)}/operation`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ operation }),
+    });
+    const result = await response.json();
+    const status = result.success ? 'success' : 'failed';
+    const log = result.log ? `<pre class="operation-log">${escapeHtml(result.log)}</pre>` : '';
+    showDeployFeedback(resultBox, status, `${escapeHtml(result.message || (result.success ? '작업이 완료되었습니다.' : '작업에 실패했습니다. 상세 로그를 확인해주세요.'))}${log}`);
+
+    if (typeof result.content === 'string') {
+      const reportContent = document.querySelector('[data-report-content]');
+      if (reportContent) reportContent.textContent = result.content;
+    }
+  } catch (error) {
+    showDeployFeedback(resultBox, 'failed', '작업에 실패했습니다. 상세 로그를 확인해주세요.');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function runDeploy(form) {
   const card = form.closest('[data-project-card]');
   const feedback = document.querySelector('[data-deploy-feedback]');
