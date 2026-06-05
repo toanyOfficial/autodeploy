@@ -737,3 +737,111 @@ body > :not(.seasonal-layer) {
   .login-shell { padding: 14px; }
   .login-card { border-radius: 28px; }
 }
+
+/* Operator-first dashboard adjustments */
+.operator-dashboard {
+  grid-template-columns: 1fr;
+}
+
+.operator-dashboard .project-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+}
+
+.developer-tools {
+  margin-top: 18px;
+}
+
+.developer-tools > summary {
+  width: fit-content;
+  border: 1px solid rgba(255, 196, 223, 0.86);
+  border-radius: 999px;
+  padding: 9px 14px;
+  color: var(--pink-700);
+  background: rgba(255, 255, 255, 0.74);
+  font-size: 0.86rem;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(255, 90, 168, 0.1);
+  list-style: none;
+}
+
+.developer-tools > summary::-webkit-details-marker {
+  display: none;
+}
+
+.developer-tools > summary::after {
+  content: " ＋";
+}
+
+.developer-tools[open] > summary::after {
+  content: " －";
+}
+
+.developer-tools[open] > summary {
+  margin-bottom: 14px;
+}
+
+.global-developer-tools {
+  justify-self: start;
+  width: min(100%, 520px);
+  opacity: 0.9;
+}
+
+.global-developer-tools:not([open]) {
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 12px 28px rgba(255, 90, 168, 0.1);
+}
+
+.global-developer-tools:not([open]) > summary {
+  margin: 0;
+}
+
+.developer-version-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.developer-version-list > li {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(255, 226, 242, 0.95);
+  border-radius: 18px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.project-card > .project-meta,
+.project-card > .version-panel,
+.project-card > .card-actions,
+.project-card > .edit-form {
+  display: none;
+}
+
+.recent-versions .version-actions,
+.recent-versions .version-edit-form {
+  display: none;
+}
+
+.operator-dashboard .deploy-placeholder {
+  margin-top: 18px;
+}
+
+.operator-dashboard .recent-versions,
+.operator-dashboard .recent-histories {
+  margin-top: 16px;
+}
+
+@media (max-width: 620px) {
+  .operator-dashboard .project-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .developer-tools > summary {
+    width: 100%;
+    text-align: center;
+  }
+}
