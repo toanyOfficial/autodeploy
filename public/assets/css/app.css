@@ -933,3 +933,46 @@ body > :not(.seasonal-particles) {
     width: fit-content;
   }
 }
+
+/* Deployment request/response feedback */
+.deploy-feedback,
+.card-deploy-status {
+  border: 1px solid rgba(255, 196, 223, 0.9);
+  border-radius: 22px;
+  padding: 14px 18px;
+  color: var(--pink-700);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 34px rgba(255, 90, 168, 0.14);
+  font-weight: 900;
+}
+
+.deploy-feedback {
+  margin: 16px clamp(18px, 5vw, 56px) 0;
+}
+
+.card-deploy-status {
+  margin-bottom: 6px;
+}
+
+.deploy-feedback[data-status="running"],
+.card-deploy-status[data-status="running"] {
+  color: #a45c00;
+  background: #fff4d3;
+}
+
+.deploy-feedback[data-status="success"],
+.card-deploy-status[data-status="success"] {
+  color: #147a52;
+  background: #dcfff0;
+}
+
+.deploy-feedback[data-status="failed"],
+.card-deploy-status[data-status="failed"] {
+  color: #b3165b;
+  background: #ffe3ee;
+}
+
+.deploy-feedback .link-button {
+  margin-left: 10px;
+  padding: 7px 12px;
+}

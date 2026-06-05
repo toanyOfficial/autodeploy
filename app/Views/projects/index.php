@@ -26,6 +26,8 @@
         <div class="deploy-banner">배포가 진행 중이에요. 최신버전 빌드, 안정화버전 빌드, 재시작, 특정버전 배포 버튼이 잠시 쉬어갑니다.</div>
     <?php endif; ?>
 
+    <div class="deploy-feedback" data-deploy-feedback hidden></div>
+
     <main class="dashboard-layout operator-dashboard">
         <section class="project-grid" aria-label="프로젝트 배포 카드 목록">
             <?php if (empty($projects)): ?>
@@ -53,6 +55,7 @@
                     </summary>
 
                     <section class="deploy-placeholder" aria-label="현재 운영중 버전과 배포 실행">
+                        <div class="card-deploy-status" data-card-deploy-status hidden></div>
                         <div>
                             <span>현재 운영중 버전</span>
                             <strong><?= htmlspecialchars($project['current_deploy']['version_name'] ?? '최신 main 또는 아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
@@ -66,10 +69,10 @@
                             <strong><?= htmlspecialchars($project['current_deploy']['ended_at'] ?? '아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
                         </div>
                         <div class="deploy-actions">
-                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form>
+                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form data-deploy-form>
                                 <button type="submit" <?= $disabled ?>>최신버전 빌드</button>
                             </form>
-                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/stable">
+                            <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/stable" data-deploy-form>
                                 <button type="submit" <?= $disabled ?>>안정화버전 빌드</button>
                             </form>
                             <button type="button" disabled>재시작</button>
@@ -155,7 +158,7 @@
                                                 <?php if ((int) $version['is_stable'] === 1): ?><span class="stable-badge">안정화</span><?php endif; ?>
                                             </div>
                                             <div class="version-actions">
-                                                <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/versions/<?= (int) $version['id'] ?>">
+                                                <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/versions/<?= (int) $version['id'] ?>" data-deploy-form>
                                                     <button type="submit" class="secondary-button" <?= $disabled ?>>특정버전 배포</button>
                                                 </form>
                                                 <button type="button" class="secondary-button" data-edit-version>수정</button>

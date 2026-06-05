@@ -184,9 +184,44 @@ final class ApiController
     private function runDeploy(callable $callback): void
     {
         try {
-            Response::json(['data' => $callback(new DeployService())], 201);
-        } catch (\RuntimeException $exception) {
-            Response::json(['message' => $exception->getMessage()], 409);
+            $history = $callback(new DeployService());
+            $success = ($history['deploy_status'] ?? null) === 'success';
+            $message = $success ? '배포가 완료되었습니다.' : $this->failureMessage($history, '배포에 실패했습니다. 리포트를 확인해주세요.');
+
+            Response::json([
+                'success' => $success,
+                'status' => $history['deploy_status'] ?? ($success ? 'success' : 'failed'),
+                'message' => $message,
+                'report_url' => isset($history['id']) && !empty($history['report_file']) ? '/reports/' . (int) $history['id'] : null,
+                'data' => $history,
+            ], 200);
+        } catch (\Throwable $exception) {
+            Response::json([
+                'success' => false,
+                'status' => 'failed',
+                'message' => $this->githubAuthMessage($exception->getMessage()) ?? $exception->getMessage(),
+                'report_url' => null,
+            ], 409);
         }
+    }
+
+    private function failureMessage(array $history, string $default): string
+    {
+        $reportFile = (string) ($history['report_file'] ?? '');
+        if ($reportFile !== '' && is_readable($reportFile)) {
+            $content = file_get_contents($reportFile) ?: '';
+            return $this->githubAuthMessage($content) ?? $default;
+        }
+
+        return $default;
+    }
+
+    private function githubAuthMessage(string $text): ?string
+    {
+        if (str_contains($text, "fatal: could not read Username for 'https://github.com'")) {
+            return 'GitHub 인증 문제로 배포에 실패했습니다. 서버의 git remote가 HTTPS 방식이거나 appuser 계정에 GitHub 인증이 설정되어 있지 않을 수 있습니다.';
+        }
+
+        return null;
     }
 }
