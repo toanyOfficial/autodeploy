@@ -37,14 +37,20 @@
 
             <?php foreach ($projects as $project): ?>
                 <?php $disabled = !empty($isDeploying) ? 'disabled' : ''; ?>
-                <article class="project-card" data-project-card>
-                    <div class="card-head">
-                        <div>
+                <details class="project-card project-fold" data-project-card>
+                    <summary class="project-summary">
+                        <div class="project-summary-title">
                             <p class="project-key"><?= htmlspecialchars($project['project_key'], ENT_QUOTES, 'UTF-8') ?></p>
                             <h2><?= htmlspecialchars($project['project_name'], ENT_QUOTES, 'UTF-8') ?></h2>
                         </div>
+                        <div class="project-summary-status">
+                            <span>현재 운영중</span>
+                            <strong><?= htmlspecialchars($project['current_deploy']['version_name'] ?? '최신 main 또는 아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
+                            <small><?= htmlspecialchars($project['current_deploy']['ended_at'] ?? '마지막 배포일시 없음', ENT_QUOTES, 'UTF-8') ?></small>
+                        </div>
                         <span class="badge">main</span>
-                    </div>
+                        <span class="fold-hint">펼쳐서 배포하기</span>
+                    </summary>
 
                     <section class="deploy-placeholder" aria-label="현재 운영중 버전과 배포 실행">
                         <div>
@@ -191,7 +197,7 @@
                             </form>
                         </section>
                     </details>
-                </article>
+                </details>
             <?php endforeach; ?>
         </section>
 

@@ -845,3 +845,94 @@ body > :not(.seasonal-layer) {
     text-align: center;
   }
 }
+
+/* Folded project cards: keep the first screen scannable */
+.project-fold {
+  display: block;
+}
+
+.project-fold > summary {
+  list-style: none;
+}
+
+.project-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.project-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.9fr) auto;
+  align-items: center;
+  gap: 16px;
+  cursor: pointer;
+}
+
+.project-summary-title h2 {
+  margin: 0;
+  font-size: clamp(1.45rem, 3vw, 2.1rem);
+  letter-spacing: -0.035em;
+}
+
+.project-summary-status {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(255, 196, 223, 0.72);
+  border-radius: 20px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.project-summary-status span,
+.project-summary-status small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.project-summary-status strong {
+  color: #b81568;
+  overflow-wrap: anywhere;
+}
+
+.fold-hint {
+  grid-column: 1 / -1;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: var(--pink-700);
+  background: rgba(255, 226, 242, 0.78);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.project-fold[open] .fold-hint {
+  color: #fff;
+  background: linear-gradient(135deg, #ff5aa8, #ff9ccc);
+}
+
+.project-fold[open] .fold-hint::before {
+  content: "접기 / ";
+}
+
+.project-fold:not([open]) {
+  padding-bottom: 20px;
+}
+
+.project-fold:not([open]) .project-summary:hover .fold-hint {
+  color: #fff;
+  background: linear-gradient(135deg, #ff5aa8, #f4b94f);
+}
+
+.project-fold[open] > .deploy-placeholder {
+  margin-top: 22px;
+}
+
+@media (max-width: 760px) {
+  .project-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .project-summary .badge {
+    width: fit-content;
+  }
+}
