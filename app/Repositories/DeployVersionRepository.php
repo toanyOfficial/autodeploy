@@ -29,23 +29,28 @@ final class DeployVersionRepository extends BaseRepository
 
     public function findStableByProject(int $projectId): ?array
     {
-        return $this->fetchOne(
-            'SELECT * FROM ' . DeployVersion::TABLE . ' WHERE project_id = :project_id AND is_stable = 1 AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        $versions = $this->fetchAll(
+            'SELECT * FROM ' . DeployVersion::TABLE
+            . ' WHERE project_id = :project_id AND is_stable = 1 AND is_active = 1'
+            . ' ORDER BY id DESC LIMIT 2',
             ['project_id' => $projectId]
         );
+
+        if (count($versions) > 1) {
+            throw new \RuntimeException('안정화버전이 중복 등록되어 있습니다. DB/소스코드 상태를 확인해 주세요.');
+        }
+
+        return $versions[0] ?? null;
     }
 
     public function create(int $projectId, array $data): array
     {
-        $isStable = isset($data['is_stable']) && (bool) $data['is_stable'];
+        $isStable = $this->stableFlag($data['is_stable'] ?? null);
 
         $this->pdo->beginTransaction();
         try {
             if ($isStable) {
-                $this->execute(
-                    'UPDATE ' . DeployVersion::TABLE . ' SET is_stable = 0 WHERE project_id = :project_id',
-                    ['project_id' => $projectId]
-                );
+                $this->clearStableVersions($projectId);
             }
 
             $this->execute(
@@ -79,25 +84,33 @@ final class DeployVersionRepository extends BaseRepository
             return null;
         }
 
-        $this->execute(
-            'UPDATE ' . DeployVersion::TABLE
-            . ' SET version_name = :version_name, git_commit_hash = :git_commit_hash, memo = :memo,'
-            . ' is_active = :is_active WHERE id = :id',
-            [
-                'id' => $id,
-                'version_name' => $data['version_name'] ?? $current['version_name'],
-                'git_commit_hash' => $data['git_commit_hash'] ?? $current['git_commit_hash'],
-                'memo' => $data['memo'] ?? $current['memo'],
-                'is_active' => array_key_exists('is_active', $data) ? (int) (bool) $data['is_active'] : (int) $current['is_active'],
-            ]
-        );
+        $hasStableInput = array_key_exists('is_stable', $data);
+        $isStable = $hasStableInput ? $this->stableFlag($data['is_stable']) : ((int) $current['is_stable'] === 1);
 
-        if (array_key_exists('is_stable', $data)) {
-            if ((bool) $data['is_stable']) {
-                return $this->markStable($id);
+        $this->pdo->beginTransaction();
+        try {
+            if ($hasStableInput && $isStable) {
+                $this->clearStableVersions((int) $current['project_id']);
             }
 
-            $this->execute('UPDATE ' . DeployVersion::TABLE . ' SET is_stable = 0 WHERE id = :id', ['id' => $id]);
+            $this->execute(
+                'UPDATE ' . DeployVersion::TABLE
+                . ' SET version_name = :version_name, git_commit_hash = :git_commit_hash, memo = :memo,'
+                . ' is_stable = :is_stable, is_active = :is_active WHERE id = :id',
+                [
+                    'id' => $id,
+                    'version_name' => $data['version_name'] ?? $current['version_name'],
+                    'git_commit_hash' => $data['git_commit_hash'] ?? $current['git_commit_hash'],
+                    'memo' => $data['memo'] ?? $current['memo'],
+                    'is_stable' => $hasStableInput ? ($isStable ? 1 : 0) : (int) $current['is_stable'],
+                    'is_active' => array_key_exists('is_active', $data) ? (int) (bool) $data['is_active'] : (int) $current['is_active'],
+                ]
+            );
+
+            $this->pdo->commit();
+        } catch (\Throwable $throwable) {
+            $this->pdo->rollBack();
+            throw $throwable;
         }
 
         return $this->find($id);
@@ -112,10 +125,7 @@ final class DeployVersionRepository extends BaseRepository
 
         $this->pdo->beginTransaction();
         try {
-            $this->execute(
-                'UPDATE ' . DeployVersion::TABLE . ' SET is_stable = 0 WHERE project_id = :project_id',
-                ['project_id' => (int) $version['project_id']]
-            );
+            $this->clearStableVersions((int) $version['project_id']);
             $this->execute('UPDATE ' . DeployVersion::TABLE . ' SET is_stable = 1 WHERE id = :id', ['id' => $id]);
             $this->pdo->commit();
         } catch (\Throwable $throwable) {
@@ -136,5 +146,18 @@ final class DeployVersionRepository extends BaseRepository
         $this->execute('UPDATE ' . DeployVersion::TABLE . ' SET is_active = 0, is_stable = 0 WHERE id = :id', ['id' => $id]);
 
         return $this->find($id);
+    }
+
+    private function clearStableVersions(int $projectId): void
+    {
+        $this->execute(
+            'UPDATE ' . DeployVersion::TABLE . ' SET is_stable = 0 WHERE project_id = :project_id AND is_stable = 1',
+            ['project_id' => $projectId]
+        );
+    }
+
+    private function stableFlag(mixed $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false;
     }
 }

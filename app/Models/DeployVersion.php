@@ -13,6 +13,7 @@ final class DeployVersion extends Model
         'id',
         'project_id',
         'version_name',
+        'version_type',
         'git_commit_hash',
         'memo',
         'is_stable',

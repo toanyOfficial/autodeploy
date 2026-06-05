@@ -34,8 +34,11 @@ final class DeployService
     public function deployStable(int $projectId): array
     {
         $stable = $this->versions->findStableByProject($projectId);
-        if ($stable === null || empty($stable['git_commit_hash'])) {
-            throw new \RuntimeException('안정화 버전 또는 Commit Hash가 등록되어 있지 않습니다.');
+        if ($stable === null) {
+            throw new \RuntimeException('안정화버전이 등록되어 있지 않습니다.');
+        }
+        if (empty($stable['git_commit_hash'])) {
+            throw new \RuntimeException('안정화버전에 Commit Hash가 등록되어 있지 않습니다.');
         }
 
         return $this->deploy($projectId, $stable, (string) $stable['git_commit_hash'], '안정화버전 빌드');
