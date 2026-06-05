@@ -116,7 +116,7 @@ final class ApiController
         $repository = new DeployHistoryRepository();
 
         if ($request->method() === 'GET') {
-            Response::json(['data' => $repository->byProject($projectId, 5)]);
+            Response::json(['data' => $repository->byProject($projectId, 3)]);
             return;
         }
 
