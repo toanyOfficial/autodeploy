@@ -49,20 +49,22 @@ document.querySelectorAll('[data-copy-report]').forEach((button) => {
   layer.setAttribute('aria-hidden', 'true');
 
   const symbols = {
-    spring: ['🌸', '♡', '❀'],
-    summer: ['✦', '✧', '•'],
-    autumn: ['🍂', '🍁', '❦'],
-    winter: ['❄', '✧', '❅'],
+    spring: ['🌸', '🌸', '✨'],
+    summer: ['🛟', '🛟', '✨'],
+    autumn: ['🍂', '🍁', '✨'],
+    winter: ['❄️', '❅', '✨'],
   };
 
-  const count = window.innerWidth < 640 ? 12 : 22;
+  const count = window.innerWidth < 640 ? 14 : 26;
   for (let index = 0; index < count; index += 1) {
     const particle = document.createElement('span');
     particle.textContent = symbols[season][index % symbols[season].length];
     particle.style.setProperty('--x', `${Math.random() * 100}vw`);
     particle.style.setProperty('--delay', `${Math.random() * -18}s`);
-    particle.style.setProperty('--duration', `${14 + Math.random() * 12}s`);
-    particle.style.setProperty('--size', `${0.65 + Math.random() * 0.85}rem`);
+    particle.style.setProperty('--duration', `${12 + Math.random() * 10}s`);
+    particle.style.setProperty('--size', `${0.72 + Math.random() * 0.95}rem`);
+    particle.style.setProperty('--drift', `${-40 + Math.random() * 80}px`);
+    particle.style.setProperty('--spin', `${180 + Math.random() * 420}deg`);
     layer.appendChild(particle);
   }
 
