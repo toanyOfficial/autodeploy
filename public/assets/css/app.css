@@ -643,24 +643,42 @@ body {
 .seasonal-particles {
   position: fixed;
   inset: 0;
-  z-index: 2;
-  pointer-events: none;
   overflow: hidden;
+  pointer-events: none;
+  z-index: 999;
   opacity: 1;
+  display: block;
 }
 
 .seasonal-particle {
-  position: absolute;
-  top: -10vh;
+  position: fixed;
+  top: -40px;
   left: var(--x);
-  color: rgba(255, 90, 168, 0.62);
+  color: inherit;
   font-size: var(--size);
   line-height: 1;
-  animation: seasonal-fall var(--duration) ease-in-out infinite;
+  opacity: 1;
+  display: inline-block;
+  visibility: visible;
+  animation: seasonal-fall var(--duration) linear infinite;
   animation-delay: var(--delay);
-  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.95)) drop-shadow(0 0 12px rgba(255, 105, 180, 0.45));
-  text-shadow: 0 0 12px rgba(255, 255, 255, 0.92), 0 0 18px rgba(255, 90, 168, 0.35);
+  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.98)) drop-shadow(0 0 14px rgba(255, 105, 180, 0.5));
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.96), 0 0 18px rgba(255, 90, 168, 0.42);
   will-change: transform, opacity;
+}
+
+.seasonal-particle-debug {
+  top: 40px !important;
+  left: 50vw !important;
+  z-index: 9999;
+  opacity: 1 !important;
+  font-size: 48px !important;
+  animation-delay: 0s !important;
+  animation-name: seasonal-debug-fall;
+}
+
+body[data-season="spring"] .seasonal-particle {
+  color: rgba(255, 90, 168, 0.74);
 }
 
 body[data-season="summer"] .seasonal-particle {
@@ -677,10 +695,16 @@ body[data-season="winter"] .seasonal-particle {
 }
 
 @keyframes seasonal-fall {
-  0% { transform: translate3d(0, -12vh, 0) rotate(0deg) scale(0.78); opacity: 0; }
+  0% { transform: translate3d(0, -10vh, 0) rotate(0deg); opacity: 0; }
   10% { opacity: 1; }
-  45% { transform: translate3d(calc(var(--drift) * 0.35), 45vh, 0) rotate(calc(var(--spin) * 0.45)) scale(1.05); opacity: 0.95; }
-  100% { transform: translate3d(var(--drift), 112vh, 0) rotate(var(--spin)) scale(0.86); opacity: 0; }
+  80% { opacity: 1; }
+  100% { transform: translate3d(var(--drift), 110vh, 0) rotate(var(--spin)); opacity: 0; }
+}
+
+@keyframes seasonal-debug-fall {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translate3d(var(--drift), 110vh, 0) rotate(var(--spin)); opacity: 0; }
 }
 
 body > :not(.seasonal-particles) {
@@ -696,7 +720,25 @@ body > :not(.seasonal-particles) {
     transition-duration: 0.01ms !important;
   }
 
-  .seasonal-particle { animation: none !important; opacity: 0.55; }
+  .seasonal-particle {
+    animation-name: seasonal-fall !important;
+    animation-duration: 28s !important;
+    animation-timing-function: linear !important;
+    animation-iteration-count: infinite !important;
+    animation-delay: var(--delay) !important;
+    opacity: 1;
+  }
+
+  .seasonal-particle-debug {
+    animation-name: seasonal-debug-fall !important;
+    animation-duration: 24s !important;
+    animation-timing-function: linear !important;
+    animation-iteration-count: infinite !important;
+    animation-delay: 0s !important;
+    top: 40px !important;
+    left: 50vw !important;
+    opacity: 1 !important;
+  }
 }
 
 @media (max-width: 880px) {

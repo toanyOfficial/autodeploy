@@ -154,18 +154,29 @@ bindProjectInteractions();
     winter: ['❄️', '❅', '✨'],
   };
 
-  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const count = reducedMotion ? 8 : (window.innerWidth < 640 ? 14 : 26);
+  const count = Math.max(24, window.innerWidth < 640 ? 24 : 32);
   for (let index = 0; index < count; index += 1) {
     const particle = document.createElement('span');
     particle.className = 'seasonal-particle';
     particle.textContent = symbols[season][index % symbols[season].length];
-    particle.style.setProperty('--x', `${Math.random() * 100}vw`);
-    particle.style.setProperty('--delay', `${Math.random() * -18}s`);
-    particle.style.setProperty('--duration', `${12 + Math.random() * 10}s`);
-    particle.style.setProperty('--size', `${0.72 + Math.random() * 0.95}rem`);
-    particle.style.setProperty('--drift', `${-40 + Math.random() * 80}px`);
-    particle.style.setProperty('--spin', `${180 + Math.random() * 420}deg`);
+
+    if (index === 0) {
+      particle.classList.add('seasonal-particle-debug');
+      particle.style.setProperty('--x', '50vw');
+      particle.style.setProperty('--delay', '0s');
+      particle.style.setProperty('--duration', '16s');
+      particle.style.setProperty('--size', '48px');
+      particle.style.setProperty('--drift', '0px');
+      particle.style.setProperty('--spin', '360deg');
+    } else {
+      particle.style.setProperty('--x', `${Math.random() * 100}vw`);
+      particle.style.setProperty('--delay', `${Math.random() * 8}s`);
+      particle.style.setProperty('--duration', `${12 + Math.random() * 10}s`);
+      particle.style.setProperty('--size', `${22 + Math.random() * 24}px`);
+      particle.style.setProperty('--drift', `${-48 + Math.random() * 96}px`);
+      particle.style.setProperty('--spin', `${180 + Math.random() * 420}deg`);
+    }
+
     layer.appendChild(particle);
   }
 
