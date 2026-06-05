@@ -1,3 +1,48 @@
+<?php
+$formatSeoulDateTime = static function (?string $value): string {
+    if (empty($value)) {
+        return '마지막 배포일시 없음';
+    }
+
+    $utc = new DateTimeZone('UTC');
+    $seoul = new DateTimeZone('Asia/Seoul');
+    $date = new DateTimeImmutable($value, $utc);
+
+    return $date->setTimezone($seoul)->format('Y-m-d H:i:s') . ' KST';
+};
+
+$formatRunningDuration = static function (?string $value): string {
+    if (empty($value)) {
+        return '실행 이력 없음';
+    }
+
+    $utc = new DateTimeZone('UTC');
+    $date = new DateTimeImmutable($value, $utc);
+    $seconds = max(1, time() - $date->getTimestamp());
+
+    if ($seconds >= 86400) {
+        return floor($seconds / 86400) . '일째 실행중';
+    }
+
+    if ($seconds >= 3600) {
+        return floor($seconds / 3600) . '시간째 실행중';
+    }
+
+    if ($seconds >= 60) {
+        return floor($seconds / 60) . '분째 실행중';
+    }
+
+    return $seconds . '초째 실행중';
+};
+
+$formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, $formatRunningDuration): string {
+    if (empty($value)) {
+        return '마지막 배포일시 없음';
+    }
+
+    return $formatSeoulDateTime($value) . ' · ' . $formatRunningDuration($value);
+};
+?>
 <!doctype html>
 <html lang="ko">
 <head>
@@ -46,18 +91,17 @@
                             <h2><?= htmlspecialchars($project['project_name'], ENT_QUOTES, 'UTF-8') ?></h2>
                         </div>
                         <div class="project-summary-status">
-                            <span>현재 운영중</span>
+                            <span>현재 운영중인 버전은..</span>
                             <strong><?= htmlspecialchars($project['current_deploy']['version_name'] ?? '최신 main 또는 아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
-                            <small><?= htmlspecialchars($project['current_deploy']['ended_at'] ?? '마지막 배포일시 없음', ENT_QUOTES, 'UTF-8') ?></small>
+                            <small><?= htmlspecialchars($formatDeployTime($project['current_deploy']['ended_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></small>
                         </div>
-                        <span class="badge">main</span>
-                        <span class="fold-hint">펼쳐서 배포하기</span>
+                        <span class="fold-hint" aria-label="프로젝트 카드 펼치기">▾</span>
                     </summary>
 
                     <section class="deploy-placeholder" aria-label="현재 운영중 버전과 배포 실행">
                         <div class="card-deploy-status" data-card-deploy-status hidden></div>
                         <div>
-                            <span>현재 운영중 버전</span>
+                            <span>현재 운영중인 버전은..</span>
                             <strong><?= htmlspecialchars($project['current_deploy']['version_name'] ?? '최신 main 또는 아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
                         </div>
                         <div>
@@ -66,7 +110,7 @@
                         </div>
                         <div>
                             <span>마지막 배포일시</span>
-                            <strong><?= htmlspecialchars($project['current_deploy']['ended_at'] ?? '아직 없음', ENT_QUOTES, 'UTF-8') ?></strong>
+                            <strong><?= htmlspecialchars($formatDeployTime($project['current_deploy']['ended_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></strong>
                         </div>
                         <div class="deploy-actions">
                             <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form data-deploy-form>
@@ -92,7 +136,7 @@
                                             <?php if ((int) $version['is_stable'] === 1): ?><span class="stable-badge">안정화</span><?php endif; ?>
                                         </div>
                                         <span><?= htmlspecialchars($version['git_commit_hash'] ?? 'commit 미등록', ENT_QUOTES, 'UTF-8') ?></span>
-                                        <small>마지막 배포일시: <?= htmlspecialchars($version['last_deployed_at'] ?? '배포 이력 없음', ENT_QUOTES, 'UTF-8') ?></small>
+                                        <small>마지막 배포일시: <?= htmlspecialchars(!empty($version['last_deployed_at']) ? $formatDeployTime($version['last_deployed_at']) : '배포 이력 없음', ENT_QUOTES, 'UTF-8') ?></small>
                                     </li>
                                 <?php endforeach; ?>
                             </ul>
@@ -109,7 +153,7 @@
                                     <li>
                                         <strong><?= htmlspecialchars($history['version_name'] ?? '최신 main', ENT_QUOTES, 'UTF-8') ?></strong>
                                         <span><?= htmlspecialchars($history['deploy_status'], ENT_QUOTES, 'UTF-8') ?></span>
-                                        <small><?= htmlspecialchars($history['ended_at'] ?? $history['started_at'] ?? $history['created_at'], ENT_QUOTES, 'UTF-8') ?></small>
+                                        <small><?= htmlspecialchars($formatDeployTime($history['ended_at'] ?? $history['started_at'] ?? $history['created_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></small>
                                         <?php if (!empty($history['report_file'])): ?>
                                             <a class="secondary-button link-button" href="/reports/<?= (int) $history['id'] ?>">리포트 상세 조회</a>
                                         <?php endif; ?>
