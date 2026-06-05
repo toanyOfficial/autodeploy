@@ -159,7 +159,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                                     <li>
                                         <strong><?= htmlspecialchars($history['version_name'] ?? '최신 main', ENT_QUOTES, 'UTF-8') ?></strong>
                                         <span><?= htmlspecialchars($history['deploy_status'], ENT_QUOTES, 'UTF-8') ?></span>
-                                        <small><?= htmlspecialchars($formatDeployTime($history['ended_at'] ?? $history['started_at'] ?? $history['created_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></small>
+                                        <small><?= htmlspecialchars($formatSeoulDateTime($history['ended_at'] ?? $history['started_at'] ?? $history['created_at'] ?? null), ENT_QUOTES, 'UTF-8') ?></small>
                                         <?php if (!empty($history['report_file'])): ?>
                                             <a class="secondary-button link-button" href="/reports/<?= (int) $history['id'] ?>">리포트 상세 조회</a>
                                         <?php endif; ?>

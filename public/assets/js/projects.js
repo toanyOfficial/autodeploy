@@ -48,13 +48,139 @@ function bindProjectInteractions(root = document) {
   root.querySelectorAll('[data-copy-report]:not([data-bound])').forEach((button) => {
     button.dataset.bound = 'true';
     button.addEventListener('click', async () => {
-      const report = document.querySelector('[data-report-content]');
-      if (!report) return;
-
-      await navigator.clipboard.writeText(report.textContent);
-      button.textContent = '복사 완료';
+      await copyReportToClipboard(button);
     });
   });
+}
+
+
+
+async function copyReportToClipboard(button) {
+  const report = document.querySelector('[data-report-content]');
+  if (!report) return;
+
+  const copied = await writeClipboard(report.textContent);
+  button.textContent = copied ? '복사 완료' : '복사 실패';
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      // Fall back to execCommand below for HTTP/internal deployments.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'readonly');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  return copied;
+}
+
+function getDeployProjectName(form) {
+  const card = form.closest('[data-project-card]');
+  return card?.querySelector('.project-summary-title h2')?.textContent?.trim()
+    || card?.querySelector('h2')?.textContent?.trim()
+    || '선택한 프로젝트';
+}
+
+function showDeployProgress(projectName) {
+  const overlay = deployProgressOverlay();
+  overlay.querySelector('[data-deploy-progress-project]').textContent = projectName;
+  overlay.hidden = false;
+  document.body.dataset.deployProgress = 'running';
+}
+
+function hideDeployProgress() {
+  const overlay = document.querySelector('[data-deploy-progress-overlay]');
+  if (overlay) overlay.hidden = true;
+  delete document.body.dataset.deployProgress;
+}
+
+function deployProgressOverlay() {
+  let overlay = document.querySelector('[data-deploy-progress-overlay]');
+  if (overlay) return overlay;
+
+  overlay = document.createElement('div');
+  overlay.className = 'deploy-progress-overlay';
+  overlay.dataset.deployProgressOverlay = 'true';
+  overlay.hidden = true;
+  overlay.setAttribute('aria-live', 'polite');
+  overlay.innerHTML = `
+    <div class="deploy-progress-card" role="status">
+      <span class="deploy-progress-spinner" aria-hidden="true"></span>
+      <div>
+        <p class="eyebrow">빌드 진행중</p>
+        <strong><span data-deploy-progress-project></span> 빌드 요청이 접수되었습니다.</strong>
+        <small>작업이 끝날 때까지 다른 오퍼레이션은 잠시 비활성화됩니다.</small>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function setOperationLock(locked) {
+  document.body.dataset.operationLocked = locked ? 'true' : 'false';
+  document.querySelectorAll('button, input, textarea, select').forEach((control) => {
+    if (locked) {
+      if (!Object.prototype.hasOwnProperty.call(control.dataset, 'wasDisabled')) {
+        control.dataset.wasDisabled = control.disabled ? 'true' : 'false';
+      }
+      control.disabled = true;
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(control.dataset, 'wasDisabled')) {
+      control.disabled = control.dataset.wasDisabled === 'true';
+      delete control.dataset.wasDisabled;
+    }
+  });
+}
+
+async function runReportOperation(button) {
+  const card = button.closest('[data-report-operation-card]');
+  const resultBox = card?.querySelector('[data-report-operation-result]');
+  const operation = button.dataset.reportOperation;
+  const historyId = button.dataset.historyId;
+
+  if (!operation || !historyId) return;
+
+  button.disabled = true;
+  showDeployFeedback(resultBox, 'running', '작업을 실행 중입니다. 잠시만 기다려주세요.');
+
+  try {
+    const response = await fetch(`/api/reports/${encodeURIComponent(historyId)}/operation`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ operation }),
+    });
+    const result = await response.json();
+    const status = result.success ? 'success' : 'failed';
+    const log = result.log ? `<pre class="operation-log">${escapeHtml(result.log)}</pre>` : '';
+    showDeployFeedback(resultBox, status, `${escapeHtml(result.message || (result.success ? '작업이 완료되었습니다.' : '작업에 실패했습니다. 상세 로그를 확인해주세요.'))}${log}`);
+
+    if (typeof result.content === 'string') {
+      const reportContent = document.querySelector('[data-report-content]');
+      if (reportContent) reportContent.textContent = result.content;
+    }
+  } catch (error) {
+    showDeployFeedback(resultBox, 'failed', '작업에 실패했습니다. 상세 로그를 확인해주세요.');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 
@@ -99,10 +225,14 @@ async function runDeploy(form) {
   const card = form.closest('[data-project-card]');
   const feedback = document.querySelector('[data-deploy-feedback]');
   const cardStatus = card?.querySelector('[data-card-deploy-status]');
+  const projectName = getDeployProjectName(form);
+  const runningMessage = `${escapeHtml(projectName)} 빌드 요청이 접수되었습니다. 배포가 진행 중입니다. 잠시만 기다려주세요.`;
 
+  setOperationLock(true);
   setDeployButtonsDisabled(true);
-  showDeployFeedback(feedback, 'running', '배포 요청이 접수되었습니다. 배포가 진행 중입니다. 잠시만 기다려주세요.');
-  showDeployFeedback(cardStatus, 'running', '상태: 배포 진행중');
+  showDeployProgress(projectName);
+  showDeployFeedback(feedback, 'running', runningMessage);
+  showDeployFeedback(cardStatus, 'running', `상태: ${escapeHtml(projectName)} 배포 진행중`);
 
   try {
     const response = await fetch(toApiDeployUrl(form.action), {
@@ -115,19 +245,20 @@ async function runDeploy(form) {
     const reportLink = result.report_url ? ` <a class="link-button secondary-button" href="${escapeAttribute(result.report_url)}">리포트 보기</a>` : '';
 
     if (success) {
-      showDeployFeedback(feedback, 'success', escapeHtml(result.message || '배포가 완료되었습니다.'));
-      showDeployFeedback(cardStatus, 'success', '상태: 배포 성공');
+      showDeployFeedback(feedback, 'success', `${escapeHtml(projectName)} 배포가 완료되었습니다.`);
+      showDeployFeedback(cardStatus, 'success', `상태: ${escapeHtml(projectName)} 배포 성공`);
     } else {
-      showDeployFeedback(feedback, 'failed', `${escapeHtml(result.message || '배포에 실패했습니다. 리포트를 확인해주세요.')}${reportLink}`);
-      showDeployFeedback(cardStatus, 'failed', '상태: 배포 실패');
+      showDeployFeedback(feedback, 'failed', `${escapeHtml(projectName)} ${escapeHtml(result.message || '배포에 실패했습니다. 리포트를 확인해주세요.')}${reportLink}`);
+      showDeployFeedback(cardStatus, 'failed', `상태: ${escapeHtml(projectName)} 배포 실패`);
     }
 
     await refreshDashboardContent();
   } catch (error) {
-    showDeployFeedback(feedback, 'failed', '배포에 실패했습니다. 리포트를 확인해주세요.');
-    showDeployFeedback(cardStatus, 'failed', '상태: 배포 실패');
+    showDeployFeedback(feedback, 'failed', `${escapeHtml(projectName)} 배포에 실패했습니다. 리포트를 확인해주세요.`);
+    showDeployFeedback(cardStatus, 'failed', `상태: ${escapeHtml(projectName)} 배포 실패`);
   } finally {
-    setDeployButtonsDisabled(false);
+    hideDeployProgress();
+    setOperationLock(false);
   }
 }
 

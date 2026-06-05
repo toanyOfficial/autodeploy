@@ -14,7 +14,7 @@
             <h1><?= htmlspecialchars($report['history']['project_name'] ?? '배포 리포트', ENT_QUOTES, 'UTF-8') ?></h1>
             <p class="muted"><?= htmlspecialchars($report['history']['report_file'] ?? '', ENT_QUOTES, 'UTF-8') ?></p>
         </div>
-        <a class="ghost-button link-button" href="/dashboard">대시보드로 돌아가기</a>
+        <a class="ghost-button link-button home-button" href="/dashboard" aria-label="대시보드로 돌아가기" title="대시보드로 돌아가기">🏠</a>
     </header>
 
     <main class="report-layout">

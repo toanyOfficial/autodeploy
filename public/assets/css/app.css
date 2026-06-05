@@ -1141,3 +1141,83 @@ body > :not(.seasonal-particles) {
   overflow: auto;
   white-space: pre-wrap;
 }
+
+/* Deployment progress overlay and operation lock */
+.deploy-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.deploy-progress-overlay[hidden] {
+  display: none;
+}
+
+.deploy-progress-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(92vw, 520px);
+  border: 1px solid rgba(255, 168, 210, 0.95);
+  border-radius: 28px;
+  padding: 20px 22px;
+  color: #b81568;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 26px 70px rgba(255, 90, 168, 0.28);
+}
+
+.deploy-progress-card strong {
+  display: block;
+  margin: 4px 0 6px;
+  font-size: clamp(1.05rem, 2.4vw, 1.4rem);
+  line-height: 1.45;
+}
+
+.deploy-progress-card small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.deploy-progress-spinner {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border: 5px solid #ffe3ee;
+  border-top-color: var(--pink-500);
+  border-radius: 50%;
+  animation: deploy-spin 0.8s linear infinite;
+}
+
+@keyframes deploy-spin {
+  to { transform: rotate(360deg); }
+}
+
+body[data-operation-locked="true"] .dashboard-layout,
+body[data-operation-locked="true"] .topbar,
+body[data-operation-locked="true"] .deploy-feedback {
+  filter: grayscale(0.25) saturate(0.72);
+  opacity: 0.62;
+}
+
+body[data-operation-locked="true"] main a,
+body[data-operation-locked="true"] main button,
+body[data-operation-locked="true"] main input,
+body[data-operation-locked="true"] main textarea,
+body[data-operation-locked="true"] main select,
+body[data-operation-locked="true"] main summary {
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.home-button {
+  width: 48px;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 1.35rem;
+  box-shadow: 0 12px 26px rgba(255, 90, 168, 0.16);
+}
