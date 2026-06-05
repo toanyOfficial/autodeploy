@@ -640,15 +640,16 @@ body {
   filter: saturate(1.08);
 }
 
-.seasonal-layer {
+.seasonal-particles {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: 2;
   pointer-events: none;
   overflow: hidden;
+  opacity: 1;
 }
 
-.seasonal-layer span {
+.seasonal-particle {
   position: absolute;
   top: -10vh;
   left: var(--x);
@@ -662,16 +663,16 @@ body {
   will-change: transform, opacity;
 }
 
-body[data-season="summer"] .seasonal-layer span {
+body[data-season="summer"] .seasonal-particle {
   color: rgba(255, 190, 80, 0.82);
   filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.96)) drop-shadow(0 0 14px rgba(82, 190, 255, 0.48));
 }
 
-body[data-season="autumn"] .seasonal-layer span {
+body[data-season="autumn"] .seasonal-particle {
   color: rgba(197, 103, 35, 0.55);
 }
 
-body[data-season="winter"] .seasonal-layer span {
+body[data-season="winter"] .seasonal-particle {
   color: rgba(151, 204, 255, 0.72);
 }
 
@@ -682,7 +683,7 @@ body[data-season="winter"] .seasonal-layer span {
   100% { transform: translate3d(var(--drift), 112vh, 0) rotate(var(--spin)) scale(0.86); opacity: 0; }
 }
 
-body > :not(.seasonal-layer) {
+body > :not(.seasonal-particles) {
   position: relative;
   z-index: 1;
 }
@@ -695,7 +696,7 @@ body > :not(.seasonal-layer) {
     transition-duration: 0.01ms !important;
   }
 
-  .seasonal-layer { display: none; }
+  .seasonal-particle { animation: none !important; opacity: 0.55; }
 }
 
 @media (max-width: 880px) {

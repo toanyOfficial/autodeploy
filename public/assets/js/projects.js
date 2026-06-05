@@ -34,8 +34,6 @@ document.querySelectorAll('[data-copy-report]').forEach((button) => {
 });
 
 (() => {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
   const month = new Date().getMonth() + 1;
   const season = month >= 3 && month <= 5 ? 'spring'
     : month >= 6 && month <= 8 ? 'summer'
@@ -45,7 +43,7 @@ document.querySelectorAll('[data-copy-report]').forEach((button) => {
   document.body.dataset.season = season;
 
   const layer = document.createElement('div');
-  layer.className = 'seasonal-layer';
+  layer.className = 'seasonal-particles';
   layer.setAttribute('aria-hidden', 'true');
 
   const symbols = {
@@ -55,9 +53,11 @@ document.querySelectorAll('[data-copy-report]').forEach((button) => {
     winter: ['❄️', '❅', '✨'],
   };
 
-  const count = window.innerWidth < 640 ? 14 : 26;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const count = reducedMotion ? 8 : (window.innerWidth < 640 ? 14 : 26);
   for (let index = 0; index < count; index += 1) {
     const particle = document.createElement('span');
+    particle.className = 'seasonal-particle';
     particle.textContent = symbols[season][index % symbols[season].length];
     particle.style.setProperty('--x', `${Math.random() * 100}vw`);
     particle.style.setProperty('--delay', `${Math.random() * -18}s`);
