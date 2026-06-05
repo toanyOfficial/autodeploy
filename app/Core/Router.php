@@ -121,6 +121,10 @@ final class Router
             $api->markStableVersion((int) $matches[1]);
             return;
         }
+        if (preg_match('#^/api/reports/(\d+)/operation$#', $path, $matches) && $method === 'POST') {
+            $api->reportOperation($request, (int) $matches[1]);
+            return;
+        }
         if (preg_match('#^/api/reports/(\d+)$#', $path, $matches) && $method === 'GET') {
             $api->report((int) $matches[1]);
             return;
