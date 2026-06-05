@@ -154,7 +154,9 @@ bindProjectInteractions();
     winter: ['❄️', '❅', '✨'],
   };
 
-  const count = Math.max(24, window.innerWidth < 640 ? 24 : 32);
+  const count = Math.max(24, window.innerWidth < 640 ? 26 : 34);
+  const fallWindow = window.innerWidth < 640 ? 22 : 28;
+
   for (let index = 0; index < count; index += 1) {
     const particle = document.createElement('span');
     particle.className = 'seasonal-particle';
@@ -164,17 +166,27 @@ bindProjectInteractions();
       particle.classList.add('seasonal-particle-debug');
       particle.style.setProperty('--x', '50vw');
       particle.style.setProperty('--delay', '0s');
-      particle.style.setProperty('--duration', '16s');
-      particle.style.setProperty('--size', '48px');
-      particle.style.setProperty('--drift', '0px');
-      particle.style.setProperty('--spin', '360deg');
+      particle.style.setProperty('--duration', '28s');
+      particle.style.setProperty('--size', '24px');
+      particle.style.setProperty('--drift', '54px');
+      particle.style.setProperty('--curve-a', '-28px');
+      particle.style.setProperty('--curve-b', '42px');
+      particle.style.setProperty('--curve-c', '14px');
+      particle.style.setProperty('--spin', '210deg');
     } else {
+      const evenlySpacedDelay = (index / count) * fallWindow;
+      const smallJitter = Math.random() * 0.45;
+      const drift = -88 + Math.random() * 176;
+
       particle.style.setProperty('--x', `${Math.random() * 100}vw`);
-      particle.style.setProperty('--delay', `${Math.random() * 8}s`);
-      particle.style.setProperty('--duration', `${12 + Math.random() * 10}s`);
-      particle.style.setProperty('--size', `${22 + Math.random() * 24}px`);
-      particle.style.setProperty('--drift', `${-48 + Math.random() * 96}px`);
-      particle.style.setProperty('--spin', `${180 + Math.random() * 420}deg`);
+      particle.style.setProperty('--delay', `${evenlySpacedDelay + smallJitter}s`);
+      particle.style.setProperty('--duration', `${24 + Math.random() * 12}s`);
+      particle.style.setProperty('--size', `${13 + Math.random() * 10}px`);
+      particle.style.setProperty('--drift', `${drift}px`);
+      particle.style.setProperty('--curve-a', `${-36 + Math.random() * 72}px`);
+      particle.style.setProperty('--curve-b', `${-52 + Math.random() * 104}px`);
+      particle.style.setProperty('--curve-c', `${drift * 0.35 + (-24 + Math.random() * 48)}px`);
+      particle.style.setProperty('--spin', `${80 + Math.random() * 220}deg`);
     }
 
     layer.appendChild(particle);
