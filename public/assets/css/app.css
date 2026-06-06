@@ -691,16 +691,6 @@ body {
   will-change: transform, opacity;
 }
 
-.seasonal-particle-debug {
-  top: 40px !important;
-  left: 50vw !important;
-  z-index: 9999;
-  opacity: 0.6 !important;
-  font-size: 24px !important;
-  animation-delay: 0s !important;
-  animation-name: seasonal-debug-fall;
-}
-
 body[data-season="spring"] .seasonal-particle {
   color: rgba(255, 90, 168, 0.4);
 }
@@ -726,13 +716,6 @@ body[data-season="winter"] .seasonal-particle {
   100% { transform: translate3d(var(--drift), 112vh, 0) rotate(var(--spin)); opacity: 0; }
 }
 
-@keyframes seasonal-debug-fall {
-  0% { transform: translate3d(0, 0, 0) rotate(-10deg); opacity: 0.6; }
-  35% { transform: translate3d(var(--curve-a), 30vh, 0) rotate(24deg); opacity: 0.53; }
-  70% { transform: translate3d(var(--curve-b), 74vh, 0) rotate(-28deg); opacity: 0.43; }
-  100% { transform: translate3d(var(--drift), 112vh, 0) rotate(var(--spin)); opacity: 0; }
-}
-
 body > :not(.seasonal-particles) {
   position: relative;
   z-index: 1;
@@ -753,17 +736,6 @@ body > :not(.seasonal-particles) {
     animation-iteration-count: infinite !important;
     animation-delay: var(--delay) !important;
     opacity: 0.5;
-  }
-
-  .seasonal-particle-debug {
-    animation-name: seasonal-debug-fall !important;
-    animation-duration: 24s !important;
-    animation-timing-function: linear !important;
-    animation-iteration-count: infinite !important;
-    animation-delay: 0s !important;
-    top: 40px !important;
-    left: 50vw !important;
-    opacity: 0.6 !important;
   }
 }
 

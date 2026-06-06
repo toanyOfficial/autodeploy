@@ -215,43 +215,17 @@ async function loadRebootDeployLog(button = null) {
 
 function formatRebootRestoreFailure(result) {
   const message = escapeHtml(result?.message || '서버 재부팅 자동화 요청에 실패했습니다.');
-  const diagnostic = result?.diagnostic_log || formatDiagnosticObject(result?.diagnostic);
-  const logWriteError = result?.log_write_error ? `
+  const details = [
+    result?.exit_code !== undefined ? `exit code: ${result.exit_code}` : '',
+    result?.command ? `command: ${result.command}` : '',
+    result?.stdout ? `stdout:\n${result.stdout}` : '',
+    result?.stderr ? `stderr:\n${result.stderr}` : '',
+    result?.detail ? `detail:\n${result.detail}` : '',
+  ].filter(Boolean).join('\n\n');
 
-log write error:
-${result.log_write_error}` : '';
+  if (!details) return message;
 
-  if (!diagnostic && !logWriteError) return message;
-
-  return `${message}<pre class="operation-log">${escapeHtml(`${diagnostic || ''}${logWriteError}`)}</pre>`;
-}
-
-function formatDiagnosticObject(diagnostic) {
-  if (!diagnostic) return '';
-
-  return [
-    '실패 발생 위치:',
-    diagnostic.location || '',
-    '',
-    '실행 명령:',
-    diagnostic.command || '',
-    '',
-    'exit code:',
-    diagnostic.exit_code ?? 'N/A',
-    '',
-    'stdout:',
-    diagnostic.stdout || '',
-    '',
-    'stderr:',
-    diagnostic.stderr || '',
-    '',
-    'Exception Message:',
-    diagnostic.exception_message || '',
-    'File:',
-    diagnostic.exception_file || '',
-    'Line:',
-    diagnostic.exception_line || '',
-  ].join('\n');
+  return `${message}<pre class="operation-log">${escapeHtml(details)}</pre>`;
 }
 
 async function copyReportToClipboard(button) {
@@ -378,7 +352,7 @@ async function refreshDeployProgressStatus() {
       await refreshDashboardContent();
     }
   } catch (error) {
-    console.warn('deploy status refresh failed', error);
+    // 상태 폴링 실패는 다음 주기에서 복구될 수 있으므로 화면 상태를 유지합니다.
   }
 }
 
@@ -572,7 +546,7 @@ async function refreshDashboardContent() {
       bindProjectInteractions(nextGlobalTools);
     }
   } catch (error) {
-    console.warn('dashboard refresh failed after deploy', error);
+    // 새로고침 실패 시 현재 화면을 유지하고 다음 사용자 동작에 맡깁니다.
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -613,32 +587,19 @@ if (document.querySelector('[data-deploy-progress-overlay]')) {
     particle.className = 'seasonal-particle';
     particle.textContent = symbols[season][index % symbols[season].length];
 
-    if (index === 0) {
-      particle.classList.add('seasonal-particle-debug');
-      particle.style.setProperty('--x', '50vw');
-      particle.style.setProperty('--delay', '0s');
-      particle.style.setProperty('--duration', '28s');
-      particle.style.setProperty('--size', '24px');
-      particle.style.setProperty('--drift', '54px');
-      particle.style.setProperty('--curve-a', '-28px');
-      particle.style.setProperty('--curve-b', '42px');
-      particle.style.setProperty('--curve-c', '14px');
-      particle.style.setProperty('--spin', '210deg');
-    } else {
-      const evenlySpacedDelay = (index / count) * fallWindow;
-      const smallJitter = Math.random() * 0.45;
-      const drift = -88 + Math.random() * 176;
+    const evenlySpacedDelay = (index / count) * fallWindow;
+    const smallJitter = Math.random() * 0.45;
+    const drift = -88 + Math.random() * 176;
 
-      particle.style.setProperty('--x', `${Math.random() * 100}vw`);
-      particle.style.setProperty('--delay', `${evenlySpacedDelay + smallJitter}s`);
-      particle.style.setProperty('--duration', `${24 + Math.random() * 12}s`);
-      particle.style.setProperty('--size', `${13 + Math.random() * 10}px`);
-      particle.style.setProperty('--drift', `${drift}px`);
-      particle.style.setProperty('--curve-a', `${-36 + Math.random() * 72}px`);
-      particle.style.setProperty('--curve-b', `${-52 + Math.random() * 104}px`);
-      particle.style.setProperty('--curve-c', `${drift * 0.35 + (-24 + Math.random() * 48)}px`);
-      particle.style.setProperty('--spin', `${80 + Math.random() * 220}deg`);
-    }
+    particle.style.setProperty('--x', `${Math.random() * 100}vw`);
+    particle.style.setProperty('--delay', `${evenlySpacedDelay + smallJitter}s`);
+    particle.style.setProperty('--duration', `${24 + Math.random() * 12}s`);
+    particle.style.setProperty('--size', `${13 + Math.random() * 10}px`);
+    particle.style.setProperty('--drift', `${drift}px`);
+    particle.style.setProperty('--curve-a', `${-36 + Math.random() * 72}px`);
+    particle.style.setProperty('--curve-b', `${-52 + Math.random() * 104}px`);
+    particle.style.setProperty('--curve-c', `${drift * 0.35 + (-24 + Math.random() * 48)}px`);
+    particle.style.setProperty('--spin', `${80 + Math.random() * 220}deg`);
 
     layer.appendChild(particle);
   }

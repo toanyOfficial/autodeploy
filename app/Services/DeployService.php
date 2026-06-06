@@ -247,7 +247,6 @@ final class DeployService
                 . ' status=' . (string) ($finalHistory['deploy_status'] ?? $status)
                 . ' ended_at=' . (string) ($finalHistory['ended_at'] ?? $endedAt)
                 . ' report_file=' . $reportFile;
-            $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
             $this->reports->writeReport($reportFile, $project, $this->reportData($startedAt, $endedAt, $deployType, $version, $targetRef, $deployedCommit, $status, $reportFile));
             $this->pruneProjectReportsIfPossible($project);
 
@@ -278,7 +277,6 @@ final class DeployService
                     . ' status=' . (string) ($updated['deploy_status'] ?? 'failed')
                     . ' ended_at=' . (string) ($updated['ended_at'] ?? $endedAt)
                     . ' report_file=' . $reportFile;
-                $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
                 $this->reports->writeReport($reportFile, $project, $this->reportData(
                     (string) ($history['started_at'] ?? ''),
                     $endedAt,
@@ -295,14 +293,6 @@ final class DeployService
         } finally {
             $this->deadlineAt = null;
             $this->lock->release();
-            if (is_string($reportFile) && $reportFile !== '') {
-                @file_put_contents(
-                    $reportFile,
-                    PHP_EOL . '[LOCK_RELEASED] currently_locked='
-                    . ($this->lock->isLocked() ? 'yes' : 'no') . PHP_EOL,
-                    FILE_APPEND
-                );
-            }
         }
     }
 
