@@ -1221,3 +1221,90 @@ body[data-operation-locked="true"] main summary {
   font-size: 1.35rem;
   box-shadow: 0 12px 26px rgba(255, 90, 168, 0.16);
 }
+
+.system-restore-panel {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 22px;
+  border: 1px solid rgba(255, 124, 124, 0.32);
+  border-radius: 22px;
+  padding: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(255, 241, 246, 0.82));
+  box-shadow: 0 18px 36px rgba(174, 31, 78, 0.08);
+}
+
+.system-restore-panel h2 {
+  margin: 2px 0 8px;
+  color: #a3203f;
+}
+
+.system-log-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.system-log {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid rgba(40, 40, 48, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(26, 28, 36, 0.94);
+  color: #f4f7fb;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.system-install-status {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(142, 127, 255, 0.28);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.system-install-status[data-status="installed"] {
+  border-color: rgba(49, 170, 104, 0.34);
+  background: rgba(239, 255, 247, 0.82);
+}
+
+.system-install-status[data-status="missing"] {
+  border-color: rgba(255, 124, 124, 0.46);
+  background: rgba(255, 246, 246, 0.86);
+}
+
+.system-check-list,
+.missing-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.system-check-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.system-check-list small,
+.missing-list li {
+  display: block;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.missing-list {
+  display: grid;
+  gap: 6px;
+}
+
+.missing-list > span {
+  color: #a3203f;
+  font-weight: 900;
+}

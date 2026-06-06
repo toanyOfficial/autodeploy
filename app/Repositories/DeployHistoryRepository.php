@@ -43,9 +43,41 @@ final class DeployHistoryRepository extends BaseRepository
         return $row !== null;
     }
 
+
+    public function running(?int $limit = null): array
+    {
+        $sql = 'SELECT h.*, p.project_name, p.project_key'
+            . ' FROM ' . DeployHistory::TABLE . ' h'
+            . ' INNER JOIN deploy_project p ON p.id = h.project_id'
+            . " WHERE h.deploy_status = 'running'"
+            . ' ORDER BY COALESCE(h.started_at, h.created_at) ASC, h.id ASC';
+
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . (int) $limit;
+        }
+
+        return $this->fetchAll($sql);
+    }
+
     public function find(int $id): ?array
     {
         return $this->fetchOne('SELECT * FROM ' . DeployHistory::TABLE . ' WHERE id = :id', ['id' => $id]);
+    }
+
+    public function failStaleRunning(int $olderThanSeconds): int
+    {
+        $cutoff = date('Y-m-d H:i:s', time() - $olderThanSeconds);
+        $endedAt = date('Y-m-d H:i:s');
+
+        return $this->execute(
+            "UPDATE " . DeployHistory::TABLE
+            . " SET deploy_status = 'failed', ended_at = :ended_at"
+            . " WHERE deploy_status = 'running' AND (started_at IS NULL OR started_at < :cutoff)",
+            [
+                'ended_at' => $endedAt,
+                'cutoff' => $cutoff,
+            ]
+        );
     }
 
 
