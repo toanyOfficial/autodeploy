@@ -153,6 +153,7 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/local/sbin/dandorak-post-reboot.sh
 RemainAfterExit=no
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
@@ -308,6 +309,7 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/local/sbin/dandorak-post-reboot.sh
 RemainAfterExit=no
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
