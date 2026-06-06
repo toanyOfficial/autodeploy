@@ -310,9 +310,9 @@ final class DeployService
             }
 
             if ($startMode === 'nohup') {
-                $this->stdout[] = '[STEP] stop only this project port for nohup start';
-                if (!$this->stopProjectPort($port)) {
-                    return $this->fail('프로젝트 포트 종료 실패: ' . $port);
+                $this->stdout[] = '[STEP] release only this project port for nohup start';
+                if (!$this->releaseProjectPort($port)) {
+                    return $this->fail('프로젝트 포트 해제 실패: ' . $port);
                 }
 
                 $startCommand = 'nohup env PORT=' . escapeshellarg((string) $port)
@@ -339,7 +339,10 @@ final class DeployService
                     self::DEFAULT_PORT_LISTEN_ATTEMPTS,
                     self::PORT_LISTEN_INTERVAL_SECONDS
                 )) {
-                    return $this->fail('HTTP 응답 확인 실패: ' . $port . ' (start_mode=nohup)');
+                    $this->stderr[] = 'HTTP 응답 확인 실패는 포트 기동 실패와 분리해서 기록합니다: port=' . $port . ' (start_mode=nohup)';
+                }
+                if ($this->appLogHasAddressInUse($path)) {
+                    return $this->fail('app.log에서 EADDRINUSE가 확인되었습니다: ' . rtrim($path, '/') . '/app.log');
                 }
 
                 $this->stdout[] = '[DEPLOY_SUCCESS_MARK] start_mode=nohup port=' . $port;
@@ -456,6 +459,78 @@ final class DeployService
 
         $this->stdout[] = '프로젝트 포트만 종료합니다: ' . $port;
         return $this->runShellCommand('pids=$(lsof -ti tcp:' . $port . ' 2>/dev/null || true); if [ -n "$pids" ]; then kill $pids; fi', null);
+    }
+
+    private function releaseProjectPort(int $port, int $maxWaitSeconds = 30): bool
+    {
+        if ($port === self::AUTO_DEPLOY_PORT) {
+            $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port . ' reason=auto_deploy_protected';
+            return false;
+        }
+
+        $this->stdout[] = '[PORT_RELEASE_START] port=' . $port . ' max_wait=' . $maxWaitSeconds . 's interval=1s';
+        $pids = $this->portPids($port);
+        if ($pids === []) {
+            $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' already_free=yes';
+            return true;
+        }
+
+        $this->terminatePids($pids, 'TERM');
+        $sigkillAttempt = max(1, (int) floor($maxWaitSeconds / 2));
+
+        for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
+            sleep(1);
+            $pids = $this->portPids($port);
+            if ($pids === []) {
+                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt;
+                return true;
+            }
+
+            $this->stdout[] = '[PORT_RELEASE_WAIT] port=' . $port
+                . ' attempt=' . $attempt . '/' . $maxWaitSeconds
+                . ' pids=' . implode(',', $pids);
+
+            if ($attempt === $sigkillAttempt) {
+                $this->terminatePids($pids, 'KILL');
+            }
+        }
+
+        $pids = $this->portPids($port);
+        $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
+            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
+
+        return $pids === [];
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function portPids(int $port): array
+    {
+        $output = [];
+        $code = 0;
+        exec('lsof -ti tcp:' . $port . ' 2>/dev/null || true', $output, $code);
+
+        return array_values(array_filter(array_map('trim', $output), static function (string $pid): bool {
+            return preg_match('/^\d+$/', $pid) === 1;
+        }));
+    }
+
+    /**
+     * @param array<int,string> $pids
+     */
+    private function terminatePids(array $pids, string $signal): void
+    {
+        $pids = array_values(array_filter($pids, static function (string $pid): bool {
+            return preg_match('/^\d+$/', $pid) === 1;
+        }));
+        if ($pids === []) {
+            return;
+        }
+
+        $signal = strtoupper($signal) === 'KILL' ? 'KILL' : 'TERM';
+        $this->stdout[] = '[PORT_RELEASE_KILL] signal=' . $signal . ' pid=' . implode(',', $pids);
+        exec('kill -s ' . $signal . ' ' . implode(' ', array_map('escapeshellarg', $pids)) . ' 2>/dev/null || true');
     }
 
     private function deletePm2Process(string $processName, string $cwd): bool
@@ -678,6 +753,21 @@ final class DeployService
         }
     }
 
+    private function appLogHasAddressInUse(string $path): bool
+    {
+        $appLog = rtrim($path, '/') . '/app.log';
+        if (!is_file($appLog) || !is_readable($appLog)) {
+            $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=no eaddrinuse=unknown';
+            return false;
+        }
+
+        $content = file_get_contents($appLog);
+        $hasError = is_string($content) && str_contains($content, 'EADDRINUSE');
+        $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=yes eaddrinuse=' . ($hasError ? 'yes' : 'no');
+
+        return $hasError;
+    }
+
     private function waitForHttpResponse(int $port, int $maxAttempts, int $intervalSeconds): bool
     {
         $url = 'http://127.0.0.1:' . $port . '/';
@@ -693,8 +783,9 @@ final class DeployService
 
             $result = $this->httpStatusCode($url);
             $statusCode = (int) $result['status_code'];
-            if ($statusCode > 0 && $statusCode < 500) {
-                $this->stdout[] = '[HTTP_CHECK_SUCCESS] url=' . $url
+            if ($statusCode > 0) {
+                $label = $statusCode >= 500 ? '[HTTP_CHECK_RESPONSE_WITH_APP_ERROR]' : '[HTTP_CHECK_SUCCESS]';
+                $this->stdout[] = $label . ' url=' . $url
                     . ' status=' . $statusCode
                     . ' attempt=' . $attempt . '/' . $maxAttempts;
                 return true;

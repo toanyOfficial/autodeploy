@@ -33,7 +33,7 @@ php scripts/test_db_connection.php
 - `POST /projects/{projectId}/deploy/versions/{versionId}`: 특정 등록 버전의 Commit Hash 기준으로 배포합니다.
 - `GET /api/deploy/status`: 전역 배포 진행 여부를 확인합니다.
 
-배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. 기본 `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료하고, 프로젝트 경로에서 프로젝트 키 기반 PM2 프로세스만 종료/시작한 뒤 실제 포트 LISTEN 상태를 확인합니다. 단, 컨시어지OPS(`/srv/tenaCierge`)처럼 수동 검증된 실행 방식이 `nohup env PORT=<port> bun run start -H 0.0.0.0 > app.log 2>&1 &`인 프로젝트는 `nextjs_bun` 안에서 `nohup` start mode로 분기해 PM2를 사용하지 않고 해당 프로젝트 포트만 종료한 뒤 `app.log`로 start 로그를 남기며 포트 LISTEN 및 HTTP 응답을 확인합니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. `nextjs_bun` PM2 start mode는 PM2 start 이후 포트 LISTEN 확인을 최대 180초(90회 × 2초)까지 대기하고, PM2가 online인데 포트만 늦게 열리는 경우 즉시 실패 처리하지 않고 PM2 진단 로그를 남기며 계속 대기합니다. 배포 상태 조회는 12분 이상 남은 `running` 이력을 stale 실패로 전환하고 lock/running 상세 상태를 반환합니다.
+배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. 기본 `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료하고, 프로젝트 경로에서 프로젝트 키 기반 PM2 프로세스만 종료/시작한 뒤 실제 포트 LISTEN 상태를 확인합니다. 단, 컨시어지OPS(`/srv/tenaCierge`)처럼 수동 검증된 실행 방식이 `nohup env PORT=<port> bun run start -H 0.0.0.0 > app.log 2>&1 &`인 프로젝트는 `nextjs_bun` 안에서 `nohup` start mode로 분기해 PM2를 사용하지 않고 해당 프로젝트 포트만 대상으로 TERM/SIGKILL과 최대 30초 release 확인을 수행한 뒤 `app.log`로 start 로그를 남기며 포트 LISTEN 및 HTTP 응답을 확인합니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. `nextjs_bun` PM2 start mode는 PM2 start 이후 포트 LISTEN 확인을 최대 180초(90회 × 2초)까지 대기하고, PM2가 online인데 포트만 늦게 열리는 경우 즉시 실패 처리하지 않고 PM2 진단 로그를 남기며 계속 대기합니다. 배포 상태 조회는 12분 이상 남은 `running` 이력을 stale 실패로 전환하고 lock/running 상세 상태를 반환합니다.
 
 ## 배포 이력 및 리포트
 
