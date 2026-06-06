@@ -48,6 +48,22 @@ final class DeployHistoryRepository extends BaseRepository
         return $this->fetchOne('SELECT * FROM ' . DeployHistory::TABLE . ' WHERE id = :id', ['id' => $id]);
     }
 
+    public function failStaleRunning(int $olderThanSeconds): int
+    {
+        $cutoff = date('Y-m-d H:i:s', time() - $olderThanSeconds);
+        $endedAt = date('Y-m-d H:i:s');
+
+        return $this->execute(
+            "UPDATE " . DeployHistory::TABLE
+            . " SET deploy_status = 'failed', ended_at = :ended_at"
+            . " WHERE deploy_status = 'running' AND (started_at IS NULL OR started_at < :cutoff)",
+            [
+                'ended_at' => $endedAt,
+                'cutoff' => $cutoff,
+            ]
+        );
+    }
+
 
     public function findWithProject(int $id): ?array
     {
