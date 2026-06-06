@@ -1221,3 +1221,38 @@ body[data-operation-locked="true"] main summary {
   font-size: 1.35rem;
   box-shadow: 0 12px 26px rgba(255, 90, 168, 0.16);
 }
+
+.system-restore-panel {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 22px;
+  border: 1px solid rgba(255, 124, 124, 0.32);
+  border-radius: 22px;
+  padding: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(255, 241, 246, 0.82));
+  box-shadow: 0 18px 36px rgba(174, 31, 78, 0.08);
+}
+
+.system-restore-panel h2 {
+  margin: 2px 0 8px;
+  color: #a3203f;
+}
+
+.system-log-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.system-log {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid rgba(40, 40, 48, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(26, 28, 36, 0.94);
+  color: #f4f7fb;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}

@@ -34,6 +34,25 @@ function bindProjectInteractions(root = document) {
     });
   });
 
+  root.querySelectorAll('[data-reboot-restore-form]:not([data-bound])').forEach((form) => {
+    form.dataset.bound = 'true';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const message = '서버를 실제로 재부팅합니다.\n\n재부팅 후 아래 작업이 자동 수행됩니다.\n\n1. DB 실행\n2. Auto Deploy 실행\n3. 등록된 활성 프로젝트 전체 안정화버전 배포\n\n약 1~3분 동안 서비스 접속이 중단될 수 있습니다.\n\n계속 진행하시겠습니까?';
+      if (!window.confirm(message)) return;
+
+      await runRebootRestore(form);
+    });
+  });
+
+  root.querySelectorAll('[data-reboot-log-button]:not([data-bound])').forEach((button) => {
+    button.dataset.bound = 'true';
+    button.addEventListener('click', async () => {
+      await loadRebootDeployLog(button);
+    });
+  });
+
 
   root.querySelectorAll('[data-report-operation]:not([data-bound])').forEach((button) => {
     button.dataset.bound = 'true';
@@ -54,6 +73,56 @@ function bindProjectInteractions(root = document) {
 }
 
 
+
+async function runRebootRestore(form) {
+  const feedback = document.querySelector('[data-reboot-restore-feedback]');
+
+  setOperationLock(true);
+  showDeployFeedback(feedback, 'running', '서버 재부팅 및 기본설정 자동화를 요청하고 있습니다. 요청이 성공하면 곧 접속이 끊길 수 있습니다.');
+
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const result = await response.json();
+
+    if (response.ok && result.success) {
+      showDeployFeedback(feedback, 'success', escapeHtml(result.message || '서버 재부팅 및 자동 안정화버전 배포가 예약되었습니다.'));
+      return;
+    }
+
+    showDeployFeedback(feedback, 'failed', escapeHtml(result.message || '서버 재부팅 자동화 요청에 실패했습니다.'));
+  } catch (error) {
+    showDeployFeedback(feedback, 'failed', '서버 재부팅 자동화 요청 중 오류가 발생했습니다.');
+  } finally {
+    setOperationLock(false);
+  }
+}
+
+async function loadRebootDeployLog(button) {
+  const logBox = document.querySelector('[data-reboot-log]');
+  if (!logBox) return;
+
+  button.disabled = true;
+  logBox.hidden = false;
+  logBox.textContent = '로그를 불러오는 중입니다...';
+
+  try {
+    const response = await fetch('/api/system/reboot-and-restore/log', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const result = await response.json();
+    logBox.textContent = result.log || result.message || '표시할 로그가 없습니다.';
+  } catch (error) {
+    logBox.textContent = '로그 조회에 실패했습니다.';
+  } finally {
+    button.disabled = false;
+  }
+}
 
 async function copyReportToClipboard(button) {
   const report = document.querySelector('[data-report-content]');
@@ -312,6 +381,7 @@ async function refreshDashboardContent() {
   }
   if (currentGlobalTools && nextGlobalTools) {
     currentGlobalTools.replaceWith(nextGlobalTools);
+    bindProjectInteractions(nextGlobalTools);
   }
 }
 
