@@ -8,6 +8,10 @@ use App\Repositories\DeployVersionRepository;
 
 final class DeployService
 {
+    private const PROJECT_TIMEOUT_SECONDS = 300;
+    private const COMMAND_TIMEOUT_SECONDS = 300;
+    private const STALE_RUNNING_SECONDS = 600;
+
     private DeployProjectRepository $projects;
     private DeployVersionRepository $versions;
     private DeployHistoryRepository $histories;
@@ -16,6 +20,7 @@ final class DeployService
     private array $stdout = [];
     private array $stderr = [];
     private ?string $failureReason = null;
+    private ?int $deadlineAt = null;
 
     public function __construct()
     {
@@ -59,6 +64,8 @@ final class DeployService
 
     public function isDeploying(): bool
     {
+        $this->histories->failStaleRunning(self::STALE_RUNNING_SECONDS);
+
         return $this->lock->isLocked() || $this->histories->hasRunning();
     }
 
@@ -73,6 +80,7 @@ final class DeployService
         $this->stdout = [];
         $this->stderr = [];
         $this->failureReason = null;
+        $this->deadlineAt = time() + self::PROJECT_TIMEOUT_SECONDS;
 
         try {
             $project = $this->projects->find($projectId);
@@ -142,6 +150,7 @@ final class DeployService
             }
             throw $throwable;
         } finally {
+            $this->deadlineAt = null;
             $this->lock->release();
         }
     }
@@ -151,6 +160,10 @@ final class DeployService
         $runtime = (string) $project['runtime_type'];
         $path = (string) $project['server_path'];
         $port = (int) $project['port'];
+
+        if (!$this->ensureProjectTimeRemaining('배포 시작')) {
+            return false;
+        }
 
         if (!$this->runCommand(['git', 'fetch', '--all'], $path)) {
             return $this->fail('git fetch --all 실패');
@@ -227,16 +240,22 @@ final class DeployService
 
     private function waitForPortListening(int $port): bool
     {
-        $this->stdout[] = '포트 LISTEN 확인 대기: ' . $port;
+        $this->stdout[] = '포트 LISTEN 확인 대기: ' . $port . ' (max_attempts=30, interval=2s)';
         for ($attempt = 1; $attempt <= 30; $attempt++) {
+            if (!$this->ensureProjectTimeRemaining('포트 LISTEN 확인')) {
+                return false;
+            }
             if ($this->isPortListening($port)) {
                 $this->stdout[] = '포트가 LISTEN 상태입니다: ' . $port . ' (attempt=' . $attempt . ')';
                 return true;
             }
-            sleep(2);
+            $remaining = $this->remainingProjectSeconds();
+            if ($attempt < 30 && $remaining > 0) {
+                sleep(min(2, $remaining));
+            }
         }
 
-        $this->stderr[] = '포트 LISTEN 대기 시간이 초과되었습니다: ' . $port;
+        $this->stderr[] = '포트 LISTEN 대기 시간이 초과되었습니다: ' . $port . ' (attempts=30, interval=2s)';
         return false;
     }
 
@@ -276,23 +295,75 @@ final class DeployService
         return $this->runShellCommand(implode(' ', $escaped), $cwd);
     }
 
+    private function timedShellCommand(string $command, int $timeout): string
+    {
+        return 'timeout --kill-after=5s ' . (int) $timeout . 's bash -lc ' . escapeshellarg($command);
+    }
+
     private function runShellCommand(string $command, ?string $cwd): bool
     {
+        if (!$this->ensureProjectTimeRemaining('명령 실행 전')) {
+            return false;
+        }
+
+        $timeout = min(self::COMMAND_TIMEOUT_SECONDS, $this->remainingProjectSeconds());
+        if ($timeout <= 0) {
+            return $this->fail('프로젝트 배포 타임아웃으로 명령을 실행하지 않습니다: ' . $command);
+        }
+
         $this->stdout[] = '$ ' . $command;
+        $this->stdout[] = 'command timeout: ' . $timeout . 's';
+        $timedCommand = $this->timedShellCommand($command, $timeout);
+        $this->stdout[] = '$ ' . $timedCommand;
         $descriptor = [
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
-        $process = proc_open($command, $descriptor, $pipes, $cwd ?: null);
+        $process = proc_open($timedCommand, $descriptor, $pipes, $cwd ?: null);
         if (!is_resource($process)) {
             $this->failureReason = '명령 실행을 시작할 수 없습니다: ' . $command;
             return false;
         }
 
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        $stdout = '';
+        $stderr = '';
+        $startedAt = time();
+        $timedOut = false;
+        $exitCode = null;
+
+        while (true) {
+            $stdout .= stream_get_contents($pipes[1]) ?: '';
+            $stderr .= stream_get_contents($pipes[2]) ?: '';
+            $status = proc_get_status($process);
+            if (!$status['running']) {
+                $exitCode = (int) ($status['exitcode'] ?? -1);
+                break;
+            }
+
+            if ((time() - $startedAt) >= $timeout || $this->remainingProjectSeconds() <= 0) {
+                $timedOut = true;
+                proc_terminate($process);
+                usleep(300000);
+                $status = proc_get_status($process);
+                if ($status['running'] && defined('SIGKILL')) {
+                    proc_terminate($process, SIGKILL);
+                }
+                break;
+            }
+
+            usleep(100000);
+        }
+
+        $stdout .= stream_get_contents($pipes[1]) ?: '';
+        $stderr .= stream_get_contents($pipes[2]) ?: '';
         fclose($pipes[1]);
         fclose($pipes[2]);
+        $code = proc_close($process);
+        if ($code === -1 && $exitCode !== null && $exitCode !== -1) {
+            $code = $exitCode;
+        }
 
         if ($stdout !== '') {
             $this->stdout[] = trim($stdout);
@@ -302,13 +373,40 @@ final class DeployService
             $this->stderr[] = trim($stderr);
         }
 
-        $code = proc_close($process);
+        if ($timedOut) {
+            $this->stderr[] = '명령 타임아웃: ' . $command . ' (timeout ' . $timeout . 's)';
+            $this->failureReason = $this->failureReason ?? '명령 타임아웃: ' . $command;
+            return false;
+        }
+
         $this->stdout[] = 'exit code: ' . $code;
-        if ($code !== 0 && $this->failureReason === null) {
+        if ($code === 124 && $this->failureReason === null) {
+            $this->failureReason = '명령 타임아웃: ' . $command . ' (timeout ' . $timeout . 's)';
+        } elseif ($code !== 0 && $this->failureReason === null) {
             $this->failureReason = '명령 실패: ' . $command . ' (exit code ' . $code . ')';
         }
 
         return $code === 0;
+    }
+
+
+    private function ensureProjectTimeRemaining(string $context): bool
+    {
+        $remaining = $this->remainingProjectSeconds();
+        if ($remaining > 0) {
+            return true;
+        }
+
+        return $this->fail('프로젝트 배포 타임아웃: ' . $context . ' (limit ' . self::PROJECT_TIMEOUT_SECONDS . 's)');
+    }
+
+    private function remainingProjectSeconds(): int
+    {
+        if ($this->deadlineAt === null) {
+            return self::COMMAND_TIMEOUT_SECONDS;
+        }
+
+        return max(0, $this->deadlineAt - time());
     }
 
     private function fail(string $reason): bool

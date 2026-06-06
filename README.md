@@ -33,7 +33,7 @@ php scripts/test_db_connection.php
 - `POST /projects/{projectId}/deploy/versions/{versionId}`: 특정 등록 버전의 Commit Hash 기준으로 배포합니다.
 - `GET /api/deploy/status`: 전역 배포 진행 여부를 확인합니다.
 
-배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료하고, 프로젝트 경로에서 PM2로 서비스를 시작한 뒤 실제 포트 LISTEN 상태를 확인합니다.
+배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료하고, 프로젝트 경로에서 PM2로 서비스를 시작한 뒤 실제 포트 LISTEN 상태를 확인합니다. 프로젝트별 배포는 최대 5분으로 제한되며 명령 타임아웃 또는 포트 미오픈 시 실패로 기록됩니다.
 
 ## 배포 이력 및 리포트
 

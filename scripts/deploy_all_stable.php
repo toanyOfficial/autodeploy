@@ -14,21 +14,12 @@ Env::load($root . '/.env');
 $timestamp = static fn (): string => gmdate('Y-m-d H:i:s') . ' UTC';
 $write = static function (string $message) use ($timestamp): void {
     fwrite(STDOUT, '[' . $timestamp() . '] ' . $message . PHP_EOL);
+    fflush(STDOUT);
 };
 
 try {
     $write('전체 활성 프로젝트 안정화버전 배포를 시작합니다.');
-    $summary = (new StableDeploymentBatchService())->deployAll();
-
-    foreach ($summary['results'] as $result) {
-        $write(sprintf(
-            '[%s] #%d %s - %s',
-            strtoupper((string) $result['status']),
-            (int) $result['project_id'],
-            (string) $result['project_name'],
-            (string) $result['message']
-        ));
-    }
+    $summary = (new StableDeploymentBatchService($write))->deployAll();
 
     $write(sprintf(
         '완료: total=%d success=%d failed=%d skipped=%d',
