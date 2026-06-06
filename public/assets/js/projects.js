@@ -93,19 +93,21 @@ async function runRebootRestore(form) {
       return;
     }
 
-    showDeployFeedback(feedback, 'failed', escapeHtml(result.message || '서버 재부팅 자동화 요청에 실패했습니다.'));
+    showDeployFeedback(feedback, 'failed', formatRebootRestoreFailure(result));
+    await loadRebootDeployLog();
   } catch (error) {
-    showDeployFeedback(feedback, 'failed', '서버 재부팅 자동화 요청 중 오류가 발생했습니다.');
+    showDeployFeedback(feedback, 'failed', `서버 재부팅 자동화 요청 중 오류가 발생했습니다.<pre class="operation-log">${escapeHtml(error?.message || String(error))}</pre>`);
+    await loadRebootDeployLog();
   } finally {
     setOperationLock(false);
   }
 }
 
-async function loadRebootDeployLog(button) {
+async function loadRebootDeployLog(button = null) {
   const logBox = document.querySelector('[data-reboot-log]');
   if (!logBox) return;
 
-  button.disabled = true;
+  if (button) button.disabled = true;
   logBox.hidden = false;
   logBox.textContent = '로그를 불러오는 중입니다...';
 
@@ -120,8 +122,49 @@ async function loadRebootDeployLog(button) {
   } catch (error) {
     logBox.textContent = '로그 조회에 실패했습니다.';
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
   }
+}
+
+function formatRebootRestoreFailure(result) {
+  const message = escapeHtml(result?.message || '서버 재부팅 자동화 요청에 실패했습니다.');
+  const diagnostic = result?.diagnostic_log || formatDiagnosticObject(result?.diagnostic);
+  const logWriteError = result?.log_write_error ? `
+
+log write error:
+${result.log_write_error}` : '';
+
+  if (!diagnostic && !logWriteError) return message;
+
+  return `${message}<pre class="operation-log">${escapeHtml(`${diagnostic || ''}${logWriteError}`)}</pre>`;
+}
+
+function formatDiagnosticObject(diagnostic) {
+  if (!diagnostic) return '';
+
+  return [
+    '실패 발생 위치:',
+    diagnostic.location || '',
+    '',
+    '실행 명령:',
+    diagnostic.command || '',
+    '',
+    'exit code:',
+    diagnostic.exit_code ?? 'N/A',
+    '',
+    'stdout:',
+    diagnostic.stdout || '',
+    '',
+    'stderr:',
+    diagnostic.stderr || '',
+    '',
+    'Exception Message:',
+    diagnostic.exception_message || '',
+    'File:',
+    diagnostic.exception_file || '',
+    'Line:',
+    diagnostic.exception_line || '',
+  ].join('\n');
 }
 
 async function copyReportToClipboard(button) {

@@ -55,6 +55,10 @@ php scripts/test_db_connection.php
 ```bash
 sudo install -m 0755 ops/usr/local/sbin/auto-reboot-deploy.sh /usr/local/sbin/auto-reboot-deploy.sh
 sudo install -m 0755 ops/usr/local/sbin/dandorak-post-reboot.sh /usr/local/sbin/dandorak-post-reboot.sh
+sudo install -d -m 0755 -o appuser -g appuser /var/log/auto_deploy
+sudo touch /var/log/auto_deploy/reboot-deploy.log
+sudo chown appuser:appuser /var/log/auto_deploy/reboot-deploy.log
+sudo chmod 0664 /var/log/auto_deploy/reboot-deploy.log
 sudo install -m 0644 ops/etc/systemd/system/dandorak-post-reboot.service /etc/systemd/system/dandorak-post-reboot.service
 sudo install -m 0440 ops/sudoers.d/auto-reboot-deploy /etc/sudoers.d/auto-reboot-deploy
 sudo systemctl daemon-reload

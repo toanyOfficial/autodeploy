@@ -8,7 +8,8 @@ POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 mkdir -p "${LOG_DIR}"
 touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
-chmod 0644 "${LOG_FILE}"
+chmod 0664 "${LOG_FILE}"
+chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
 
 exec >> "${LOG_FILE}" 2>&1
 
