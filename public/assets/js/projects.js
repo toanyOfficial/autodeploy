@@ -273,6 +273,7 @@ function showDeployProgress(projectName, projects = []) {
   renderDeployProgressStatuses(projects);
   overlay.hidden = false;
   document.body.dataset.deployProgress = 'running';
+  document.body.classList.add('is-deploying');
   setOperationLock(true);
 }
 
@@ -280,11 +281,22 @@ function hideDeployProgress() {
   const overlay = document.querySelector('[data-deploy-progress-overlay]');
   if (overlay) overlay.hidden = true;
   delete document.body.dataset.deployProgress;
+  document.body.classList.remove('is-deploying');
   setOperationLock(false);
 }
 
+function normalizeDeployProgressOverlay(overlay) {
+  if (!overlay) return null;
+
+  if (overlay.parentElement !== document.body || overlay.nextElementSibling !== null) {
+    document.body.appendChild(overlay);
+  }
+
+  return overlay;
+}
+
 function deployProgressOverlay() {
-  let overlay = document.querySelector('[data-deploy-progress-overlay]');
+  let overlay = normalizeDeployProgressOverlay(document.querySelector('[data-deploy-progress-overlay]'));
   if (overlay) return overlay;
 
   overlay = document.createElement('div');
@@ -293,7 +305,7 @@ function deployProgressOverlay() {
   overlay.hidden = true;
   overlay.setAttribute('aria-live', 'polite');
   overlay.innerHTML = `
-    <div class="deploy-progress-card" role="dialog" aria-modal="true" aria-label="배포 진행 상황">
+    <div class="deploy-progress-modal" role="dialog" aria-modal="true" aria-label="배포 진행 상황">
       <span class="deploy-progress-spinner" aria-hidden="true"></span>
       <div class="deploy-progress-content">
         <p class="eyebrow">배포 진행중</p>
@@ -304,7 +316,60 @@ function deployProgressOverlay() {
     </div>
   `;
   document.body.appendChild(overlay);
-  return overlay;
+  return normalizeDeployProgressOverlay(overlay);
+}
+
+function renderDeployProgressStatuses(projects) {
+  const list = document.querySelector('[data-deploy-progress-status-list]');
+  if (!list) return;
+
+  const items = Array.isArray(projects) ? projects : [];
+  if (items.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+
+  const labels = { success: '배포성공', running: '배포중', pending: '배포대기' };
+  const order = ['success', 'running', 'pending'];
+  list.innerHTML = order.map((state) => {
+    const stateItems = items.filter((item) => item?.state === state);
+    if (stateItems.length === 0) return '';
+
+    return `
+      <div class="deploy-progress-status-group" data-state="${state}">
+        <span>${labels[state]}</span>
+        <ul>${stateItems.map((item) => `<li>${escapeHtml(item.project_name || item.project_key || '프로젝트')}</li>`).join('')}</ul>
+      </div>
+    `;
+  }).join('');
+}
+
+async function refreshDeployProgressStatus() {
+  const overlay = document.querySelector('[data-deploy-progress-overlay]');
+  if (!overlay || overlay.hidden) return;
+
+  try {
+    const response = await fetch('/api/deploy/status', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const status = await response.json();
+    const projects = Array.isArray(status?.projects) ? status.projects : [];
+    const running = projects.find((item) => item?.state === 'running');
+
+    if (running?.project_name) {
+      overlay.querySelector('[data-deploy-progress-project]').textContent = running.project_name;
+    }
+    renderDeployProgressStatuses(projects);
+
+    if (!status.deploying && overlay.dataset.serverDeploying === 'true') {
+      hideDeployProgress();
+      await refreshDashboardContent();
+    }
+  } catch (error) {
+    // 상태 폴링 실패는 다음 주기에서 복구될 수 있으므로 화면 상태를 유지합니다.
+  }
 }
 
 function renderDeployProgressStatuses(projects) {
@@ -578,8 +643,10 @@ async function refreshDashboardContent() {
 }
 
 bindProjectInteractions();
-if (document.querySelector('[data-deploy-progress-overlay]')) {
+const initialDeployProgressOverlay = normalizeDeployProgressOverlay(document.querySelector('[data-deploy-progress-overlay]'));
+if (initialDeployProgressOverlay) {
   document.body.dataset.deployProgress = 'running';
+  document.body.classList.add('is-deploying');
   setOperationLock(true);
   window.setInterval(refreshDeployProgressStatus, 5000);
   refreshDeployProgressStatus();

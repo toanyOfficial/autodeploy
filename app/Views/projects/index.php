@@ -73,7 +73,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
             $primaryRunning = $runningProjects[0]['project_name'] ?? '프로젝트';
         ?>
         <div class="deploy-progress-overlay" data-deploy-progress-overlay data-server-deploying="true" aria-live="polite">
-            <div class="deploy-progress-card" role="dialog" aria-modal="true" aria-label="배포 진행 상황">
+            <div class="deploy-progress-modal" role="dialog" aria-modal="true" aria-label="배포 진행 상황">
                 <span class="deploy-progress-spinner" aria-hidden="true"></span>
                 <div class="deploy-progress-content">
                     <p class="eyebrow">배포 진행중</p>
