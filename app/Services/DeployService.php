@@ -93,14 +93,90 @@ final class DeployService
         $running = $this->histories->running(10);
         $locked = $this->lock->isLocked();
 
+        $deploying = $locked || $running !== [];
+
         return [
-            'deploying' => $locked || $running !== [],
+            'deploying' => $deploying,
             'locked' => $locked,
             'has_running' => $running !== [],
             'stale_failed' => $staleFailed,
             'stale_after_seconds' => self::STALE_RUNNING_SECONDS,
             'running' => $running,
+            'projects' => $this->deploymentProjectStatuses($running, $deploying),
         ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $running
+     * @return array<int,array<string,mixed>>
+     */
+    private function deploymentProjectStatuses(array $running, bool $deploying): array
+    {
+        $runningByProject = [];
+        $oldestRunningAt = null;
+
+        foreach ($running as $history) {
+            $projectId = (int) ($history['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                continue;
+            }
+
+            $runningByProject[$projectId] = $history;
+            $startedAt = $this->timestampOrNull((string) ($history['started_at'] ?? $history['created_at'] ?? ''));
+            if ($startedAt !== null && ($oldestRunningAt === null || $startedAt < $oldestRunningAt)) {
+                $oldestRunningAt = $startedAt;
+            }
+        }
+
+        $batchWindowStart = $oldestRunningAt !== null ? $oldestRunningAt - self::STALE_RUNNING_SECONDS : time() - self::STALE_RUNNING_SECONDS;
+        $statuses = [];
+
+        foreach ($this->projects->all(true) as $project) {
+            $projectId = (int) $project['id'];
+            $latest = $this->histories->latestByProject($projectId);
+            $runningHistory = $runningByProject[$projectId] ?? null;
+            $state = 'pending';
+            $label = '배포대기';
+            $history = $latest;
+
+            if ($runningHistory !== null) {
+                $state = 'running';
+                $label = '배포중';
+                $history = $runningHistory;
+            } elseif ($deploying && $latest !== null && (string) ($latest['deploy_status'] ?? '') === 'success') {
+                $endedAt = $this->timestampOrNull((string) ($latest['ended_at'] ?? $latest['created_at'] ?? ''));
+                if ($endedAt !== null && $endedAt >= $batchWindowStart) {
+                    $state = 'success';
+                    $label = '배포성공';
+                }
+            } elseif (!$deploying && $latest !== null && (string) ($latest['deploy_status'] ?? '') === 'success') {
+                $state = 'success';
+                $label = '배포성공';
+            }
+
+            $statuses[] = [
+                'project_id' => $projectId,
+                'project_name' => (string) ($project['project_name'] ?? $project['project_key'] ?? ('project-' . $projectId)),
+                'project_key' => (string) ($project['project_key'] ?? ''),
+                'state' => $state,
+                'label' => $label,
+                'started_at' => $history['started_at'] ?? null,
+                'ended_at' => $history['ended_at'] ?? null,
+                'version_name' => $history['version_name'] ?? null,
+            ];
+        }
+
+        return $statuses;
+    }
+
+    private function timestampOrNull(string $value): ?int
+    {
+        if ($value === '') {
+            return null;
+        }
+
+        $timestamp = strtotime($value . ' UTC');
+        return $timestamp === false ? null : $timestamp;
     }
 
     private function deploy(int $projectId, ?array $version, string $targetRef, string $deployType): array
@@ -171,7 +247,6 @@ final class DeployService
                 . ' status=' . (string) ($finalHistory['deploy_status'] ?? $status)
                 . ' ended_at=' . (string) ($finalHistory['ended_at'] ?? $endedAt)
                 . ' report_file=' . $reportFile;
-            $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
             $this->reports->writeReport($reportFile, $project, $this->reportData($startedAt, $endedAt, $deployType, $version, $targetRef, $deployedCommit, $status, $reportFile));
             $this->pruneProjectReportsIfPossible($project);
 
@@ -202,7 +277,6 @@ final class DeployService
                     . ' status=' . (string) ($updated['deploy_status'] ?? 'failed')
                     . ' ended_at=' . (string) ($updated['ended_at'] ?? $endedAt)
                     . ' report_file=' . $reportFile;
-                $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
                 $this->reports->writeReport($reportFile, $project, $this->reportData(
                     (string) ($history['started_at'] ?? ''),
                     $endedAt,
@@ -219,14 +293,6 @@ final class DeployService
         } finally {
             $this->deadlineAt = null;
             $this->lock->release();
-            if (is_string($reportFile) && $reportFile !== '') {
-                @file_put_contents(
-                    $reportFile,
-                    PHP_EOL . '[LOCK_RELEASED] currently_locked='
-                    . ($this->lock->isLocked() ? 'yes' : 'no') . PHP_EOL,
-                    FILE_APPEND
-                );
-            }
         }
     }
 
