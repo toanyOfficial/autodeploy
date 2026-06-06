@@ -279,19 +279,27 @@ final class DeployService
 
         if ($runtime === 'nextjs_bun') {
             $processName = $this->pm2ProcessName($project);
-            $this->logProjectPortConfiguration($project, $processName);
-            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s path=%s port=%d pm2=%s',
+            $startMode = $this->nextjsBunStartMode($project);
+            $this->logProjectPortConfiguration($project, $startMode === 'pm2' ? $processName : null, $startMode);
+            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s start_mode=%s path=%s port=%d pm2=%s',
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
                 $runtime,
+                $startMode,
                 $path,
                 $port,
-                $processName
+                $startMode === 'pm2' ? $processName : 'n/a'
             );
-            $this->stdout[] = '[STEP] npm ci';
-            if (!$this->runCommand(['npm', 'ci'], $path)) {
-                return $this->fail('npm ci 실패: 기존 서비스는 종료하지 않습니다.');
+
+            if ($startMode === 'pm2') {
+                $this->stdout[] = '[STEP] npm ci';
+                if (!$this->runCommand(['npm', 'ci'], $path)) {
+                    return $this->fail('npm ci 실패: 기존 서비스는 종료하지 않습니다.');
+                }
+            } else {
+                $this->stdout[] = '[STEP] npm ci skipped for nohup start mode; 수동 검증 명령과 동일하게 유지합니다.';
             }
+
             $this->stdout[] = '[STEP] clean .next';
             if (!$this->runShellCommand('rm -rf .next', $path)) {
                 return $this->fail('rm -rf .next 실패: 기존 서비스는 종료하지 않습니다.');
@@ -299,6 +307,44 @@ final class DeployService
             $this->stdout[] = '[STEP] bun run build';
             if (!$this->runCommand(['bun', 'run', 'build'], $path)) {
                 return $this->fail('bun run build 실패: 기존 서비스는 종료하지 않습니다.');
+            }
+
+            if ($startMode === 'nohup') {
+                $this->stdout[] = '[STEP] stop only this project port for nohup start';
+                if (!$this->stopProjectPort($port)) {
+                    return $this->fail('프로젝트 포트 종료 실패: ' . $port);
+                }
+
+                $startCommand = 'nohup env PORT=' . escapeshellarg((string) $port)
+                    . ' bun run start -H 0.0.0.0 > app.log 2>&1 &';
+                $this->stdout[] = '[NOHUP_START] at=' . $this->now()
+                    . ' cwd=' . $path
+                    . ' expected_port=' . $port
+                    . ' app_log=' . rtrim($path, '/') . '/app.log'
+                    . ' command=' . $startCommand;
+                if (!$this->runLoginShellCommand($startCommand, $path)) {
+                    return $this->fail('nohup 서비스 시작 실패: port=' . $port);
+                }
+                $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
+
+                if (!$this->waitForProjectPortListening(
+                    $port,
+                    self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS,
+                    self::PORT_LISTEN_INTERVAL_SECONDS
+                )) {
+                    return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (start_mode=nohup)');
+                }
+                if (!$this->waitForHttpResponse(
+                    $port,
+                    self::DEFAULT_PORT_LISTEN_ATTEMPTS,
+                    self::PORT_LISTEN_INTERVAL_SECONDS
+                )) {
+                    return $this->fail('HTTP 응답 확인 실패: ' . $port . ' (start_mode=nohup)');
+                }
+
+                $this->stdout[] = '[DEPLOY_SUCCESS_MARK] start_mode=nohup port=' . $port;
+                $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트/HTTP 확인 완료: start_mode=nohup port=' . $port;
+                return true;
             }
 
             $this->stdout[] = '[STEP] stop only this project process/port';
@@ -550,6 +596,29 @@ final class DeployService
         return $status === 'stopped' || $status === 'errored' || $status === 'stopping';
     }
 
+    private function nextjsBunStartMode(array $project): string
+    {
+        $runtime = strtolower((string) ($project['runtime_type'] ?? ''));
+        if (in_array($runtime, ['nextjs_bun_nohup', 'nextjs_bun:nohup'], true)) {
+            return 'nohup';
+        }
+
+        $serverPath = rtrim((string) ($project['server_path'] ?? ''), '/');
+        $projectKey = strtolower((string) ($project['project_key'] ?? ''));
+        $projectName = strtolower((string) ($project['project_name'] ?? ''));
+        $pathBaseName = strtolower(basename($serverPath));
+
+        if ($serverPath === '/srv/tenaCierge'
+            || $pathBaseName === 'tenacierge'
+            || str_contains($projectKey, 'tenacierge')
+            || str_contains($projectName, 'tenacierge')
+            || str_contains($projectName, '컨시어지')) {
+            return 'nohup';
+        }
+
+        return 'pm2';
+    }
+
     private function pm2ProcessStatus(string $processName, string $cwd): ?string
     {
         return $this->pm2ProcessSnapshot($processName, $cwd)['status'] ?? null;
@@ -607,6 +676,65 @@ final class DeployService
         if ($output !== []) {
             $this->stderr[] = implode(PHP_EOL, $output);
         }
+    }
+
+    private function waitForHttpResponse(int $port, int $maxAttempts, int $intervalSeconds): bool
+    {
+        $url = 'http://127.0.0.1:' . $port . '/';
+        $this->stdout[] = '[HTTP_CHECK_START] url=' . $url
+            . ' max_attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's';
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            if (!$this->ensureProjectTimeRemaining('HTTP 응답 확인')) {
+                $this->stderr[] = '[HTTP_CHECK_FAIL] url=' . $url . ' reason=project_timeout attempt=' . $attempt . '/' . $maxAttempts;
+                return false;
+            }
+
+            $result = $this->httpStatusCode($url);
+            $statusCode = (int) $result['status_code'];
+            if ($statusCode > 0 && $statusCode < 500) {
+                $this->stdout[] = '[HTTP_CHECK_SUCCESS] url=' . $url
+                    . ' status=' . $statusCode
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+                return true;
+            }
+
+            if ($attempt === 1 || $attempt % 5 === 0 || $attempt === $maxAttempts) {
+                $this->stdout[] = '[HTTP_CHECK_WAIT] url=' . $url
+                    . ' status=' . ($statusCode > 0 ? (string) $statusCode : 'none')
+                    . ' curl_exit=' . (int) $result['exit_code']
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+            }
+
+            $remaining = $this->remainingProjectSeconds();
+            if ($attempt < $maxAttempts && $remaining > 0) {
+                sleep(min($intervalSeconds, $remaining));
+            }
+        }
+
+        $result = $this->httpStatusCode($url);
+        $this->stderr[] = '[HTTP_CHECK_FAIL] url=' . $url
+            . ' status=' . (((int) $result['status_code']) > 0 ? (string) $result['status_code'] : 'none')
+            . ' curl_exit=' . (int) $result['exit_code'];
+
+        return false;
+    }
+
+    /**
+     * @return array{status_code:int,exit_code:int}
+     */
+    private function httpStatusCode(string $url): array
+    {
+        $output = [];
+        $code = 0;
+        exec('curl -sS --max-time 5 -o /dev/null -w "%{http_code}" ' . escapeshellarg($url) . ' 2>/dev/null', $output, $code);
+        $statusCode = isset($output[0]) ? (int) trim((string) $output[0]) : 0;
+
+        return [
+            'status_code' => $statusCode,
+            'exit_code' => $code,
+        ];
     }
 
     private function isPortListening(int $port): bool
@@ -694,14 +822,16 @@ final class DeployService
         return null;
     }
 
-    private function logProjectPortConfiguration(array $project, ?string $processName): void
+    private function logProjectPortConfiguration(array $project, ?string $processName, string $startMode = 'pm2'): void
     {
         $path = (string) $project['server_path'];
         $expectedPort = (int) $project['port'];
         $this->stdout[] = '[PORT_CONFIG] source=auto_deploy project_port=' . $expectedPort
             . ' runtime=' . (string) ($project['runtime_type'] ?? '')
+            . ' start_mode=' . $startMode
             . ' pm2=' . ($processName ?? 'n/a')
-            . ' path=' . $path;
+            . ' path=' . $path
+            . ' home=' . (string) (getenv('HOME') ?: '');
 
         foreach ($this->portEvidenceFiles($path) as $file) {
             $this->stdout[] = '[PORT_CONFIG] ' . $this->summarizePortEvidence($file);
