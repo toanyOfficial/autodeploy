@@ -81,6 +81,23 @@ final class DeployHistoryRepository extends BaseRepository
     }
 
 
+    public function failRunningByProject(int $projectId, ?string $reportFile = null): int
+    {
+        $endedAt = date('Y-m-d H:i:s');
+
+        return $this->execute(
+            "UPDATE " . DeployHistory::TABLE
+            . " SET deploy_status = 'failed', ended_at = :ended_at, report_file = COALESCE(report_file, :report_file)"
+            . " WHERE project_id = :project_id AND deploy_status = 'running'",
+            [
+                'project_id' => $projectId,
+                'ended_at' => $endedAt,
+                'report_file' => $reportFile,
+            ]
+        );
+    }
+
+
     public function findWithProject(int $id): ?array
     {
         return $this->fetchOne(

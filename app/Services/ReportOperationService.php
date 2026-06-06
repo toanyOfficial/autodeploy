@@ -98,6 +98,9 @@ final class ReportOperationService
         if ($port < 1 || $port > 65535) {
             throw new \RuntimeException('포트 값이 올바르지 않습니다.');
         }
+        if ($port === 9090) {
+            throw new \RuntimeException('Auto Deploy 보호 포트 9090은 종료할 수 없습니다.');
+        }
 
         return $this->runSequence([
             ['command' => 'sudo fuser -k ' . $port . '/tcp', 'cwd' => null],

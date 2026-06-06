@@ -426,7 +426,23 @@ final class ApiController
 
     public function deployStatus(): void
     {
-        Response::json((new DeployService())->deploymentStatus());
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(5);
+        }
+
+        try {
+            Response::json((new DeployService())->deploymentStatus());
+        } catch (\Throwable $throwable) {
+            Response::json([
+                'deploying' => false,
+                'locked' => false,
+                'has_running' => false,
+                'stale_failed' => 0,
+                'stale_after_seconds' => 0,
+                'running' => [],
+                'error' => $throwable->getMessage(),
+            ], 503);
+        }
     }
 
     public function deployLatest(int $projectId): void
