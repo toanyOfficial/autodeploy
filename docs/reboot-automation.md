@@ -83,6 +83,21 @@ trap cleanup EXIT
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
 
+log "DB 준비 상태를 대기합니다."
+for attempt in $(seq 1 60); do
+  if sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/test_db_connection.php >/dev/null 2>&1"; then
+    log "DB가 준비되었습니다. attempt=${attempt}"
+    break
+  fi
+
+  if [ "${attempt}" -eq 60 ]; then
+    log "DB 준비 대기 시간이 초과되었습니다."
+    exit 1
+  fi
+
+  sleep 2
+done
+
 log "Auto Deploy를 appuser 권한으로 실행합니다."
 sudo -u appuser -H bash -lc '
 cd /srv/auto_deploy
@@ -211,6 +226,21 @@ trap cleanup EXIT
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
 
+log "DB 준비 상태를 대기합니다."
+for attempt in $(seq 1 60); do
+  if sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/test_db_connection.php >/dev/null 2>&1"; then
+    log "DB가 준비되었습니다. attempt=${attempt}"
+    break
+  fi
+
+  if [ "${attempt}" -eq 60 ]; then
+    log "DB 준비 대기 시간이 초과되었습니다."
+    exit 1
+  fi
+
+  sleep 2
+done
+
 log "Auto Deploy를 appuser 권한으로 실행합니다."
 sudo -u appuser -H bash -lc '
 cd /srv/auto_deploy
@@ -297,12 +327,13 @@ sudo systemctl daemon-reload
 5. 서버 reboot
 6. 부팅 후 `/usr/local/sbin/dandorak-post-reboot.sh` 실행
 7. `/srv/dandorak/start-database.sh` 실행
-8. Auto Deploy를 appuser 권한으로 실행
-9. `php scripts/deploy_all_stable.php` 실행
-10. 내부 PHP 코드가 `DeployService::deployStable()`을 활성 프로젝트별로 순차 호출
-11. Caddy validate
-12. Caddy reload
-13. `dandorak-post-reboot.service` disable
+8. DB Ready Check: 최대 120초 동안 2초 간격으로 `php scripts/test_db_connection.php` 재시도
+9. Auto Deploy를 appuser 권한으로 실행
+10. `php scripts/deploy_all_stable.php` 실행
+11. 내부 PHP 코드가 `DeployService::deployStable()`을 활성 프로젝트별로 순차 호출
+12. Caddy validate
+13. Caddy reload
+14. `dandorak-post-reboot.service` disable
 
 post-reboot script에는 프로젝트별 `git pull`, `npm ci`, `npm run build`, `pm2 restart` 명령을 작성하지 않습니다. 프로젝트별 배포는 Auto Deploy 내부 `DeployService::deployStable()`만 재사용합니다.
 

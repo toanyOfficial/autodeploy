@@ -33,6 +33,21 @@ trap cleanup EXIT
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
 
+log "DB 준비 상태를 대기합니다."
+for attempt in $(seq 1 60); do
+  if sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/test_db_connection.php >/dev/null 2>&1"; then
+    log "DB가 준비되었습니다. attempt=${attempt}"
+    break
+  fi
+
+  if [ "${attempt}" -eq 60 ]; then
+    log "DB 준비 대기 시간이 초과되었습니다."
+    exit 1
+  fi
+
+  sleep 2
+done
+
 log "Auto Deploy를 appuser 권한으로 실행합니다."
 sudo -u appuser -H bash -lc '
 cd /srv/auto_deploy
