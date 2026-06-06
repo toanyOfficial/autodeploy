@@ -16,6 +16,9 @@ final class DashboardController
         $versionRepository = new DeployVersionRepository();
         $historyRepository = new DeployHistoryRepository();
         $deployService = new DeployService();
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(10);
+        }
 
         $projects = array_map(function (array $project) use ($versionRepository, $historyRepository): array {
             $project['recent_versions'] = $versionRepository->byProject((int) $project['id'], 5);
@@ -27,9 +30,17 @@ final class DashboardController
         $flashError = $_SESSION['flash_error'] ?? null;
         unset($_SESSION['flash_error']);
 
+        $deploymentStatus = ['deploying' => false, 'locked' => false, 'has_running' => false, 'stale_failed' => 0, 'running' => []];
+        try {
+            $deploymentStatus = $deployService->deploymentStatus();
+        } catch (\Throwable $throwable) {
+            $flashError = $flashError ?? '배포 상태 조회 중 오류가 발생했습니다: ' . $throwable->getMessage();
+        }
+
         Response::view('projects/index', [
             'projects' => $projects,
-            'isDeploying' => $deployService->isDeploying(),
+            'isDeploying' => (bool) ($deploymentStatus['deploying'] ?? false),
+            'deploymentStatus' => $deploymentStatus,
             'flashError' => $flashError,
         ]);
     }

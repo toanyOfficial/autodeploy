@@ -124,7 +124,14 @@ for attempt in $(seq 1 60); do
 done
 
 log "전체 활성 프로젝트 안정화버전 배포 CLI를 appuser 권한으로 실행합니다."
+deploy_exit=0
+set +e
 sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/deploy_all_stable.php"
+deploy_exit=$?
+set -e
+if [ "${deploy_exit}" -ne 0 ]; then
+  log "전체 안정화버전 배포 CLI가 실패 상태로 종료되었습니다. 후속 검증은 계속 진행합니다. exit_code=${deploy_exit}"
+fi
 
 log "Caddy 설정을 검증합니다."
 caddy validate
@@ -271,7 +278,14 @@ for attempt in $(seq 1 60); do
 done
 
 log "전체 활성 프로젝트 안정화버전 배포 CLI를 appuser 권한으로 실행합니다."
+deploy_exit=0
+set +e
 sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/deploy_all_stable.php"
+deploy_exit=$?
+set -e
+if [ "${deploy_exit}" -ne 0 ]; then
+  log "전체 안정화버전 배포 CLI가 실패 상태로 종료되었습니다. 후속 검증은 계속 진행합니다. exit_code=${deploy_exit}"
+fi
 
 log "Caddy 설정을 검증합니다."
 caddy validate
