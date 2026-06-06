@@ -50,7 +50,7 @@ php scripts/test_db_connection.php
 
 관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼이 있습니다. 이 버튼은 `POST /api/system/reboot-and-restore`만 호출하며, 서버에서 고정 명령인 `sudo /usr/local/sbin/auto-reboot-deploy.sh`만 실행합니다.
 
-운영 서버 반영 시에는 저장소의 템플릿 파일을 아래 위치로 배치합니다.
+운영 서버 반영 시에는 저장소의 템플릿 파일을 아래 위치로 배치합니다. 전체 복붙 설치 가이드는 `docs/reboot-automation.md`를 확인합니다.
 
 ```bash
 sudo install -m 0755 ops/usr/local/sbin/auto-reboot-deploy.sh /usr/local/sbin/auto-reboot-deploy.sh

@@ -11,6 +11,7 @@ use App\Repositories\DeployVersionRepository;
 use App\Services\DeployService;
 use App\Services\ReportService;
 use App\Services\ReportOperationService;
+use App\Services\RebootAutomationStatusService;
 
 final class ApiController
 {
@@ -183,10 +184,36 @@ final class ApiController
     }
 
 
+    public function rebootAutomationStatus(): void
+    {
+        Response::json((new RebootAutomationStatusService())->status());
+    }
+
     public function rebootAndRestore(Request $request): void
     {
         if ($request->method() !== 'POST') {
             Response::json(['message' => 'Method not allowed.'], 405);
+            return;
+        }
+
+        $status = (new RebootAutomationStatusService())->status();
+        if (!$status['installed']) {
+            $diagnostic = [
+                'location' => __METHOD__ . ':preflight',
+                'command' => 'preflight: reboot automation installation status',
+                'exit_code' => null,
+                'stdout' => implode(PHP_EOL, $status['missing']),
+                'stderr' => '재부팅 자동화 기능이 아직 설치되지 않았습니다.',
+            ];
+            $this->appendRebootDeployLog($this->formatDiagnosticLog('API reboot-and-restore preflight failed', $diagnostic));
+
+            Response::json([
+                'success' => false,
+                'message' => '재부팅 자동화 기능이 아직 설치되지 않았습니다. 설치 가이드를 확인해 주세요.',
+                'status' => $status,
+                'diagnostic' => $diagnostic,
+                'diagnostic_log' => $this->formatDiagnosticText($diagnostic),
+            ], 428);
             return;
         }
 
@@ -332,8 +359,8 @@ final class ApiController
     {
         $path = $this->rebootDeployLogPath();
         $directory = dirname($path);
-        if (!is_dir($directory) && !@mkdir($directory, 0775, true) && !is_dir($directory)) {
-            return '로그 디렉터리를 생성할 수 없습니다: ' . $directory;
+        if (!is_dir($directory)) {
+            return '로그 디렉터리가 설치되어 있지 않습니다: ' . $directory;
         }
 
         if (@file_put_contents($path, $content . PHP_EOL, FILE_APPEND | LOCK_EX) === false) {

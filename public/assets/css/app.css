@@ -1256,3 +1256,55 @@ body[data-operation-locked="true"] main summary {
   line-height: 1.5;
   white-space: pre-wrap;
 }
+
+.system-install-status {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(142, 127, 255, 0.28);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.system-install-status[data-status="installed"] {
+  border-color: rgba(49, 170, 104, 0.34);
+  background: rgba(239, 255, 247, 0.82);
+}
+
+.system-install-status[data-status="missing"] {
+  border-color: rgba(255, 124, 124, 0.46);
+  background: rgba(255, 246, 246, 0.86);
+}
+
+.system-check-list,
+.missing-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.system-check-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.system-check-list small,
+.missing-list li {
+  display: block;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.missing-list {
+  display: grid;
+  gap: 6px;
+}
+
+.missing-list > span {
+  color: #a3203f;
+  font-weight: 900;
+}
