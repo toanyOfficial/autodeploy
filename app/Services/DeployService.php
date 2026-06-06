@@ -285,6 +285,7 @@ final class DeployService
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
                 $runtime,
+                $startMode,
                 $path,
                 $port
             );
