@@ -146,7 +146,7 @@ final class DeployService
                 . ' report_file=' . $reportFile;
             $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
             $this->reports->writeReport($reportFile, $project, $this->reportData($startedAt, $endedAt, $deployType, $version, $targetRef, $deployedCommit, $status, $reportFile));
-            $this->pruneReportsSafely($project);
+            $this->pruneProjectReportsIfPossible($project);
 
             return $finalHistory;
         } catch (\Throwable $throwable) {
@@ -185,7 +185,7 @@ final class DeployService
                     'failed',
                     $reportFile
                 ));
-                $this->pruneReportsSafely($project);
+                $this->pruneProjectReportsIfPossible($project);
             }
             throw $throwable;
         } finally {
@@ -202,7 +202,7 @@ final class DeployService
         }
     }
 
-    private function pruneReportsSafely(array $project): void
+    private function pruneProjectReportsIfPossible(array $project): void
     {
         try {
             $this->reports->pruneProjectReports($project);
@@ -245,15 +245,6 @@ final class DeployService
             'stderr' => implode(PHP_EOL, $this->stderr),
             'failure_reason' => $this->failureReason,
         ];
-    }
-
-    private function pruneReportsSafely(array $project): void
-    {
-        try {
-            $this->reports->pruneProjectReports($project);
-        } catch (\Throwable $throwable) {
-            $this->stderr[] = '리포트 정리 실패(배포 결과는 유지): ' . $throwable->getMessage();
-        }
     }
 
     private function prepareLongRunningExecution(): void
