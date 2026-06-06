@@ -1119,8 +1119,7 @@ body > :not(.seasonal-particles) {
   position: fixed;
   inset: 0;
   z-index: 2000;
-  display: grid;
-  place-items: center;
+  display: block;
   padding: 24px;
   background: rgba(55, 45, 52, 0.28);
   backdrop-filter: grayscale(1) saturate(0.35) brightness(0.88) blur(1px);
@@ -1132,12 +1131,15 @@ body > :not(.seasonal-particles) {
 }
 
 .deploy-progress-card {
-  position: relative;
+  position: fixed;
+  top: 50vh;
+  left: 50vw;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  width: min(92vw, 620px);
-  max-height: min(82vh, 680px);
+  width: min(calc(100vw - 48px), 620px);
+  max-height: min(calc(100vh - 48px), 680px);
   overflow: auto;
   border: 1px solid rgba(255, 168, 210, 0.95);
   border-radius: 28px;
