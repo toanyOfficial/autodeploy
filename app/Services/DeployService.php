@@ -285,6 +285,7 @@ final class DeployService
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
                 $runtime,
+                $startMode,
                 $path,
                 $port
             );
@@ -589,13 +590,11 @@ final class DeployService
                 return false;
             }
 
-            $details = $this->portReadinessDetails($port);
-            if ((bool) $details['ready']) {
-                $this->stdout[] = '[PORT_CHECK_SUCCESS] port=' . $port
-                    . ' pid=' . ($details['pid'] ?? 'unknown')
-                    . ' source=' . (string) $details['source']
-                    . ' attempt=' . $attempt . '/' . $maxAttempts
-                    . ' detail=' . (string) $details['detail'];
+        for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
+            sleep(1);
+            $pids = $this->portPids($port);
+            if ($pids === []) {
+                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt;
                 return true;
             }
 
@@ -606,21 +605,14 @@ final class DeployService
                     . ' probes=' . (string) $details['detail'];
             }
 
-            $remaining = $this->remainingProjectSeconds();
-            if ($attempt < $maxAttempts && $remaining > 0) {
-                sleep(min($intervalSeconds, $remaining));
+            if ($attempt === $sigkillAttempt) {
+                $this->terminatePids($pids, 'KILL');
             }
         }
 
-        $finalDetails = $this->portReadinessDetails($port);
-        if ((bool) $finalDetails['ready']) {
-            $this->stdout[] = '[PORT_CHECK_SUCCESS] port=' . $port
-                . ' pid=' . ($finalDetails['pid'] ?? 'unknown')
-                . ' source=' . (string) $finalDetails['source']
-                . ' attempt=final'
-                . ' detail=' . (string) $finalDetails['detail'];
-            return true;
-        }
+        $pids = $this->portPids($port);
+        $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
+            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
 
         $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port
             . ' attempts=' . $maxAttempts
@@ -629,7 +621,18 @@ final class DeployService
             . ' listen=' . $this->listeningPortsSummary($port, null)
             . ' probes=' . (string) $finalDetails['detail'];
 
-        return false;
+    /**
+     * @return array<int,string>
+     */
+    private function portPids(int $port): array
+    {
+        $output = [];
+        $code = 0;
+        exec('lsof -ti tcp:' . $port . ' 2>/dev/null || true', $output, $code);
+
+        return array_values(array_filter(array_map('trim', $output), static function (string $pid): bool {
+            return preg_match('/^\d+$/', $pid) === 1;
+        }));
     }
 
     private function isPortListening(int $port): bool
