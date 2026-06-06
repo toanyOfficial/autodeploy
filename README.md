@@ -45,3 +45,21 @@ php scripts/test_db_connection.php
 - `GET /api/reports/{historyId}`는 해당 배포 이력의 리포트 내용과 감지된 대표 실패 케이스를 반환합니다.
 - `POST /api/reports/{historyId}/operation`은 `sync_dependencies`, `check_git_auth`, `fix_permissions`, `kill_port`, `clean_next_build`, `copy_report` 중 whitelist된 리포트 복구/확인 operation만 실행합니다.
 - `GET /reports/{historyId}`는 리포트 상세 화면, 전체 복사 버튼, 대표 실패 케이스 안내/복구 액션 카드를 제공합니다.
+
+## 서버 재부팅 + 기본설정 + 전체 안정화버전 자동배포
+
+관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼이 있습니다. 이 버튼은 `POST /api/system/reboot-and-restore`만 호출하며, 서버에서 고정 명령인 `sudo /usr/local/sbin/auto-reboot-deploy.sh`만 실행합니다.
+
+운영 서버 반영 시에는 저장소의 템플릿 파일을 아래 위치로 배치합니다.
+
+```bash
+sudo install -m 0755 ops/usr/local/sbin/auto-reboot-deploy.sh /usr/local/sbin/auto-reboot-deploy.sh
+sudo install -m 0755 ops/usr/local/sbin/dandorak-post-reboot.sh /usr/local/sbin/dandorak-post-reboot.sh
+sudo install -m 0644 ops/etc/systemd/system/dandorak-post-reboot.service /etc/systemd/system/dandorak-post-reboot.service
+sudo install -m 0440 ops/sudoers.d/auto-reboot-deploy /etc/sudoers.d/auto-reboot-deploy
+sudo systemctl daemon-reload
+```
+
+`dandorak-post-reboot.sh`는 프로젝트별 배포 명령을 직접 실행하지 않고, appuser 권한으로 `php scripts/deploy_all_stable.php`를 호출합니다. 해당 CLI는 `StableDeploymentBatchService`를 통해 활성 프로젝트 목록을 조회하고 각 프로젝트에 대해 `DeployService::deployStable()`을 순차 호출합니다.
+
+최근 자동화 로그는 고정 파일 `/var/log/auto_deploy/reboot-deploy.log`만 조회합니다.

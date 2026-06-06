@@ -182,6 +182,78 @@ final class ApiController
         }
     }
 
+
+    public function rebootAndRestore(Request $request): void
+    {
+        if ($request->method() !== 'POST') {
+            Response::json(['message' => 'Method not allowed.'], 405);
+            return;
+        }
+
+        $command = ['sudo', '/usr/local/sbin/auto-reboot-deploy.sh'];
+        $descriptor = [
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $process = proc_open($command, $descriptor, $pipes);
+        if (!is_resource($process)) {
+            Response::json([
+                'success' => false,
+                'message' => '서버 재부팅 자동화 명령을 시작할 수 없습니다.',
+            ], 500);
+            return;
+        }
+
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $code = proc_close($process);
+
+        if ($code !== 0) {
+            Response::json([
+                'success' => false,
+                'message' => '서버 재부팅 자동화 명령 실행에 실패했습니다.',
+                'stdout' => trim($stdout),
+                'stderr' => trim($stderr),
+            ], 409);
+            return;
+        }
+
+        Response::json([
+            'success' => true,
+            'message' => '서버 재부팅 및 자동 안정화버전 배포가 예약되었습니다.',
+        ]);
+    }
+
+    public function rebootDeployLog(): void
+    {
+        $path = '/var/log/auto_deploy/reboot-deploy.log';
+        if (!is_readable($path)) {
+            Response::json([
+                'success' => true,
+                'log' => '',
+                'message' => '아직 재부팅 자동화 로그가 없습니다.',
+            ]);
+            return;
+        }
+
+        $lines = file($path, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) {
+            Response::json([
+                'success' => false,
+                'log' => '',
+                'message' => '재부팅 자동화 로그를 읽을 수 없습니다.',
+            ], 500);
+            return;
+        }
+
+        Response::json([
+            'success' => true,
+            'log' => implode(PHP_EOL, array_slice($lines, -400)),
+        ]);
+    }
+
     public function deployStatus(): void
     {
         Response::json(['deploying' => (new DeployService())->isDeploying()]);

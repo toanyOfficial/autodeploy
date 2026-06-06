@@ -129,6 +129,14 @@ final class Router
             $api->report((int) $matches[1]);
             return;
         }
+        if ($path === '/api/system/reboot-and-restore' && $method === 'POST') {
+            $api->rebootAndRestore($request);
+            return;
+        }
+        if ($path === '/api/system/reboot-and-restore/log' && $method === 'GET') {
+            $api->rebootDeployLog();
+            return;
+        }
         if ($path === '/api/deploy/status' && $method === 'GET') {
             $api->deployStatus();
             return;

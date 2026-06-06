@@ -1,0 +1,12 @@
+[Unit]
+Description=Dandorak post-reboot Auto Deploy restore
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dandorak-post-reboot.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
