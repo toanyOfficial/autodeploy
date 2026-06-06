@@ -83,9 +83,13 @@ trap cleanup EXIT
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
 
+db_ready() {
+  sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php -r 'require \"app/Core/Autoloader.php\"; App\Config\Env::load(\".env\"); App\Config\Database::connection()->query(\"SELECT 1\");' >/dev/null 2>&1"
+}
+
 log "DB 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
-  if sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/test_db_connection.php >/dev/null 2>&1"; then
+  if db_ready; then
     log "DB가 준비되었습니다. attempt=${attempt}"
     break
   fi
@@ -226,9 +230,13 @@ trap cleanup EXIT
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
 
+db_ready() {
+  sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php -r 'require \"app/Core/Autoloader.php\"; App\Config\Env::load(\".env\"); App\Config\Database::connection()->query(\"SELECT 1\");' >/dev/null 2>&1"
+}
+
 log "DB 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
-  if sudo -u appuser -H bash -lc "cd '${AUTO_DEPLOY_DIR}' && php scripts/test_db_connection.php >/dev/null 2>&1"; then
+  if db_ready; then
     log "DB가 준비되었습니다. attempt=${attempt}"
     break
   fi
@@ -327,7 +335,7 @@ sudo systemctl daemon-reload
 5. 서버 reboot
 6. 부팅 후 `/usr/local/sbin/dandorak-post-reboot.sh` 실행
 7. `/srv/dandorak/start-database.sh` 실행
-8. DB Ready Check: 최대 120초 동안 2초 간격으로 `php scripts/test_db_connection.php` 재시도
+8. DB Ready Check: 최대 120초 동안 2초 간격으로 Auto Deploy `.env`를 로드한 PHP PDO `SELECT 1` 연결 테스트 재시도
 9. Auto Deploy를 appuser 권한으로 실행
 10. `php scripts/deploy_all_stable.php` 실행
 11. 내부 PHP 코드가 `DeployService::deployStable()`을 활성 프로젝트별로 순차 호출
