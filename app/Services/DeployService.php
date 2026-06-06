@@ -285,6 +285,7 @@ final class DeployService
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
                 $runtime,
+                $startMode,
                 $path,
                 $port
             );
@@ -498,6 +499,81 @@ final class DeployService
     {
         return 'nohup env PORT=' . escapeshellarg((string) $port)
             . ' bun run start -H 0.0.0.0 > app.log 2>&1 &';
+    }
+
+    private function appLogHasAddressInUse(string $path): bool
+    {
+        $appLog = rtrim($path, '/') . '/app.log';
+        if (!is_file($appLog) || !is_readable($appLog)) {
+            $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=no eaddrinuse=unknown';
+            return false;
+        }
+
+        $content = file_get_contents($appLog);
+        $hasError = is_string($content) && str_contains($content, 'EADDRINUSE');
+        $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=yes eaddrinuse=' . ($hasError ? 'yes' : 'no');
+
+        return $hasError;
+    }
+
+    private function waitForHttpResponse(int $port, int $maxAttempts, int $intervalSeconds): bool
+    {
+        $url = 'http://127.0.0.1:' . $port . '/';
+        $this->stdout[] = '[HTTP_CHECK_START] url=' . $url
+            . ' max_attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's';
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            if (!$this->ensureProjectTimeRemaining('HTTP 응답 확인')) {
+                $this->stderr[] = '[HTTP_CHECK_FAIL] url=' . $url . ' reason=project_timeout attempt=' . $attempt . '/' . $maxAttempts;
+                return false;
+            }
+
+            $result = $this->httpStatusCode($url);
+            $statusCode = (int) $result['status_code'];
+            if ($statusCode > 0) {
+                $label = $statusCode >= 500 ? '[HTTP_CHECK_RESPONSE_WITH_APP_ERROR]' : '[HTTP_CHECK_SUCCESS]';
+                $this->stdout[] = $label . ' url=' . $url
+                    . ' status=' . $statusCode
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+                return true;
+            }
+
+            if ($attempt === 1 || $attempt % 5 === 0 || $attempt === $maxAttempts) {
+                $this->stdout[] = '[HTTP_CHECK_WAIT] url=' . $url
+                    . ' status=' . ($statusCode > 0 ? (string) $statusCode : 'none')
+                    . ' curl_exit=' . (int) $result['exit_code']
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+            }
+
+            $remaining = $this->remainingProjectSeconds();
+            if ($attempt < $maxAttempts && $remaining > 0) {
+                sleep(min($intervalSeconds, $remaining));
+            }
+        }
+
+        $result = $this->httpStatusCode($url);
+        $this->stderr[] = '[HTTP_CHECK_FAIL] url=' . $url
+            . ' status=' . (((int) $result['status_code']) > 0 ? (string) $result['status_code'] : 'none')
+            . ' curl_exit=' . (int) $result['exit_code'];
+
+        return false;
+    }
+
+    /**
+     * @return array{status_code:int,exit_code:int}
+     */
+    private function httpStatusCode(string $url): array
+    {
+        $output = [];
+        $code = 0;
+        exec('curl -sS --max-time 5 -o /dev/null -w "%{http_code}" ' . escapeshellarg($url) . ' 2>/dev/null', $output, $code);
+        $statusCode = isset($output[0]) ? (int) trim((string) $output[0]) : 0;
+
+        return [
+            'status_code' => $statusCode,
+            'exit_code' => $code,
+        ];
     }
 
     private function appLogHasAddressInUse(string $path): bool
