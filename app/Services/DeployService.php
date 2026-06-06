@@ -576,6 +576,65 @@ final class DeployService
         ];
     }
 
+    private function waitForProjectPortListening(int $port, int $maxAttempts, int $intervalSeconds): bool
+    {
+        $maxWaitSeconds = $maxAttempts * $intervalSeconds;
+        $this->stdout[] = '[PORT_CHECK_START] port=' . $port
+            . ' max_attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's'
+            . ' max_wait=' . $maxWaitSeconds . 's';
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            if (!$this->ensureProjectTimeRemaining('포트 LISTEN 확인')) {
+                $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port . ' reason=project_timeout attempt=' . $attempt . '/' . $maxAttempts;
+                return false;
+            }
+
+        for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
+            sleep(1);
+            $pids = $this->portPids($port);
+            if ($pids === []) {
+                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt;
+                return true;
+            }
+
+            if ($attempt === 1 || $attempt % 10 === 0 || $attempt === $maxAttempts) {
+                $this->stdout[] = '[PORT_CHECK_WAIT] port=' . $port
+                    . ' attempt=' . $attempt . '/' . $maxAttempts
+                    . ' listen=' . $this->listeningPortsSummary($port, null)
+                    . ' probes=' . (string) $details['detail'];
+            }
+
+            if ($attempt === $sigkillAttempt) {
+                $this->terminatePids($pids, 'KILL');
+            }
+        }
+
+        $pids = $this->portPids($port);
+        $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
+            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
+
+        $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port
+            . ' attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's'
+            . ' max_wait=' . $maxWaitSeconds . 's'
+            . ' listen=' . $this->listeningPortsSummary($port, null)
+            . ' probes=' . (string) $finalDetails['detail'];
+
+    /**
+     * @return array<int,string>
+     */
+    private function portPids(int $port): array
+    {
+        $output = [];
+        $code = 0;
+        exec('lsof -ti tcp:' . $port . ' 2>/dev/null || true', $output, $code);
+
+        return array_values(array_filter(array_map('trim', $output), static function (string $pid): bool {
+            return preg_match('/^\d+$/', $pid) === 1;
+        }));
+    }
+
     private function isPortListening(int $port): bool
     {
         return (bool) $this->portReadinessDetails($port)['ready'];
