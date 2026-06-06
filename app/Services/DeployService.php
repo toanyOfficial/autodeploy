@@ -12,6 +12,19 @@ final class DeployService
     private const COMMAND_TIMEOUT_SECONDS = 300;
     private const STALE_RUNNING_SECONDS = 720;
     private const AUTO_DEPLOY_PORT = 9090;
+    private const PROJECT_ENV_UNSET_KEYS = [
+        'DB_HOST',
+        'DB_PORT',
+        'DB_USER',
+        'DB_PASSWORD',
+        'DB_NAME',
+        'DATABASE_URL',
+        'MYSQL_HOST',
+        'MYSQL_PORT',
+        'MYSQL_USER',
+        'MYSQL_PASSWORD',
+        'MYSQL_DATABASE',
+    ];
     private const DEFAULT_PORT_LISTEN_ATTEMPTS = 30;
     private const NEXTJS_BUN_PORT_LISTEN_ATTEMPTS = 90;
     private const PORT_LISTEN_INTERVAL_SECONDS = 2;
@@ -308,11 +321,11 @@ final class DeployService
                 return $this->fail('rm -rf .next 실패');
             }
             $this->stdout[] = '[STEP] bun run build';
-            if (!$this->runCommand(['bun', 'run', 'build'], $path)) {
+            if (!$this->runShellCommand($this->projectEnvCommand('bun run build', $path), $path)) {
                 return $this->fail('bun run build 실패');
             }
 
-            $startCommand = $this->nextjsBunStartCommand($port);
+            $startCommand = $this->nextjsBunStartCommand($port, $path);
             $this->stdout[] = '[NOHUP_START] at=' . $this->now()
                 . ' cwd=' . $path
                 . ' expected_port=' . $port
@@ -553,10 +566,71 @@ final class DeployService
         exec('kill -s ' . $signal . ' ' . implode(' ', array_map('escapeshellarg', $pids)) . ' 2>/dev/null || true');
     }
 
-    private function nextjsBunStartCommand(int $port): string
+    private function nextjsBunStartCommand(int $port, string $path): string
     {
-        return 'nohup env PORT=' . escapeshellarg((string) $port)
-            . ' bun run start -H 0.0.0.0 > app.log 2>&1 &';
+        return 'nohup ' . $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
+            . ' bun run start -H 0.0.0.0', $path) . ' > app.log 2>&1 &';
+    }
+
+    private function projectEnvCommand(string $command, string $path): string
+    {
+        $unsetParts = array_map(static function (string $key): string {
+            return '-u ' . escapeshellarg($key);
+        }, self::PROJECT_ENV_UNSET_KEYS);
+
+        $envParts = [];
+        foreach ($this->projectDatabaseEnv($path) as $key => $value) {
+            $envParts[] = $key . '=' . escapeshellarg($value);
+        }
+
+        return trim('env ' . implode(' ', $unsetParts) . ' ' . implode(' ', $envParts) . ' ' . $command);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function projectDatabaseEnv(string $path): array
+    {
+        $envFile = rtrim($path, '/') . '/.env';
+        if (!is_file($envFile) || !is_readable($envFile)) {
+            return [];
+        }
+
+        $values = [];
+        foreach (file($envFile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            if (str_starts_with($line, 'export ')) {
+                $line = trim(substr($line, 7));
+            }
+            if (!str_contains($line, '=')) {
+                continue;
+            }
+
+            [$key, $value] = array_map('trim', explode('=', $line, 2));
+            if (!in_array($key, self::PROJECT_ENV_UNSET_KEYS, true)) {
+                continue;
+            }
+
+            $values[$key] = $this->normalizeDotenvValue($value);
+        }
+
+        return $values;
+    }
+
+    private function normalizeDotenvValue(string $value): string
+    {
+        if (strlen($value) >= 2) {
+            $quote = $value[0];
+            if (($quote === '"' || $quote === "'") && substr($value, -1) === $quote) {
+                $value = substr($value, 1, -1);
+                return $quote === '"' ? stripcslashes($value) : str_replace("\'", "'", $value);
+            }
+        }
+
+        return $value;
     }
 
     private function appLogHasAddressInUse(string $path): bool
