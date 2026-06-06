@@ -37,6 +37,23 @@ final class Router
             return;
         }
 
+        if (($path === '/docs/reboot-automation.md' || $path === '/docs/reboot-automation') && $method === 'GET') {
+            $doc = dirname(__DIR__, 2) . '/docs/reboot-automation.md';
+            if (is_readable($doc)) {
+                header('Content-Type: text/plain; charset=utf-8');
+                readfile($doc);
+                return;
+            }
+            $publicDoc = dirname(__DIR__, 2) . '/public/docs/reboot-automation.md';
+            if (is_readable($publicDoc)) {
+                header('Content-Type: text/plain; charset=utf-8');
+                readfile($publicDoc);
+                return;
+            }
+            Response::json(['message' => 'Document not found.'], 404);
+            return;
+        }
+
         AuthMiddleware::requireLogin();
 
         if ($path === '/dashboard' && $method === 'GET') {
