@@ -194,12 +194,57 @@ final class DeployService
             if (is_string($reportFile) && $reportFile !== '') {
                 @file_put_contents(
                     $reportFile,
-                    PHP_EOL . '[finalize] DeploymentLock release 완료: currently_locked='
+                    PHP_EOL . '[LOCK_RELEASED] currently_locked='
                     . ($this->lock->isLocked() ? 'yes' : 'no') . PHP_EOL,
                     FILE_APPEND
                 );
             }
         }
+    }
+
+    private function pruneReportsSafely(array $project): void
+    {
+        try {
+            $this->reports->pruneProjectReports($project);
+        } catch (\Throwable $throwable) {
+            $this->stderr[] = '리포트 정리 실패(배포 결과는 유지): ' . $throwable->getMessage();
+        }
+    }
+
+    private function prepareLongRunningExecution(): void
+    {
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
+        }
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(self::PROJECT_TIMEOUT_SECONDS + 120);
+        }
+    }
+
+    private function reportData(
+        string $startedAt,
+        string $endedAt,
+        string $deployType,
+        ?array $version,
+        string $targetRef,
+        ?string $deployedCommit,
+        string $status,
+        ?string $reportFile = null
+    ): array {
+        return [
+            'started_at' => $startedAt,
+            'ended_at' => $endedAt,
+            'deploy_type' => $deployType,
+            'version_name' => $version['version_name'] ?? '최신 main',
+            'requested_commit_hash' => $targetRef,
+            'deployed_commit_hash' => $deployedCommit,
+            'result' => $status,
+            'report_file' => $reportFile,
+            'stdout' => implode(PHP_EOL, $this->stdout),
+            'stderr' => implode(PHP_EOL, $this->stderr),
+            'failure_reason' => $this->failureReason,
+        ];
     }
 
     private function pruneReportsSafely(array $project): void
@@ -310,9 +355,14 @@ final class DeployService
                 $path
             )) {
                 $this->appendPm2Diagnostics($processName, $path, '포트 LISTEN 실패 직전');
-                $this->cleanupProjectRuntime($project, $path, $port);
+                if ($this->shouldCleanupAfterPortFailure($processName, $path, $port)) {
+                    $this->cleanupProjectRuntime($project, $path, $port);
+                } else {
+                    $this->stderr[] = 'PM2 프로세스가 아직 살아 있어 실패 cleanup을 건너뜁니다: pm2=' . $processName . ' port=' . $port;
+                }
                 return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (pm2=' . $processName . ')');
             }
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] pm2=' . $processName . ' port=' . $port;
             $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: ' . $processName . ' port=' . $port;
             return true;
         }
@@ -342,6 +392,7 @@ final class DeployService
                 $this->stopProjectPort($port);
                 return $this->fail('포트 LISTEN 확인 실패: ' . $port);
             }
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] port=' . $port;
             $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: port=' . $port;
             return true;
         }
@@ -410,37 +461,43 @@ final class DeployService
         ?string $cwd = null
     ): bool {
         $maxWaitSeconds = $maxAttempts * $intervalSeconds;
-        $this->stdout[] = '포트 LISTEN 확인 대기: ' . $port
-            . ' (max_attempts=' . $maxAttempts
-            . ', interval=' . $intervalSeconds . 's'
-            . ', max_wait=' . $maxWaitSeconds . 's'
-            . ($processName !== null ? ', pm2=' . $processName : '')
-            . ')';
+        $this->stdout[] = '[PORT_CHECK_START] port=' . $port
+            . ' max_attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's'
+            . ' max_wait=' . $maxWaitSeconds . 's'
+            . ($processName !== null ? ' pm2=' . $processName : '');
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             if (!$this->ensureProjectTimeRemaining('포트 LISTEN 확인')) {
                 if ($processName !== null && $cwd !== null) {
                     $this->appendPm2Diagnostics($processName, $cwd, '프로젝트 타임아웃으로 포트 확인 중단');
                 }
+                $this->stderr[] = '[PORT_CHECK_FAILED] port=' . $port . ' reason=project_timeout attempt=' . $attempt . '/' . $maxAttempts;
                 return false;
             }
 
-            if ($this->isPortListening($port)) {
-                $this->stdout[] = '포트가 LISTEN 상태입니다: ' . $port . ' (attempt=' . $attempt . ')';
+            $details = $this->portReadinessDetails($port);
+            if ((bool) $details['ready']) {
+                $this->stdout[] = '[PORT_CHECK_SUCCESS] port=' . $port
+                    . ' pid=' . ($details['pid'] ?? 'unknown')
+                    . ' source=' . (string) $details['source']
+                    . ' attempt=' . $attempt . '/' . $maxAttempts
+                    . ' detail=' . (string) $details['detail'];
                 return true;
             }
 
-            if ($processName !== null && $cwd !== null && ($attempt === 1 || $attempt % 10 === 0 || $attempt === $maxAttempts)) {
-                $status = $this->pm2ProcessStatus($processName, $cwd);
-                $this->stdout[] = '포트 미개방 상태 확인: port=' . $port
+            if ($attempt === 1 || $attempt % 10 === 0 || $attempt === $maxAttempts) {
+                $status = ($processName !== null && $cwd !== null) ? $this->pm2ProcessStatus($processName, $cwd) : null;
+                $this->stdout[] = '[PORT_CHECK_WAIT] port=' . $port
                     . ' attempt=' . $attempt . '/' . $maxAttempts
-                    . ' pm2=' . $processName
-                    . ' status=' . ($status ?? 'unknown');
+                    . ($processName !== null ? ' pm2=' . $processName : '')
+                    . ' pm2_status=' . ($status ?? 'n/a')
+                    . ' probes=' . (string) $details['detail'];
                 if ($status === 'online') {
-                    $this->stdout[] = 'PM2 프로세스는 online 이지만 포트가 아직 LISTEN 상태가 아닙니다. 즉시 실패 처리하지 않고 계속 대기합니다.';
-                } elseif ($status === null) {
+                    $this->stdout[] = 'PM2 프로세스는 online 이지만 포트가 아직 확인되지 않았습니다. 즉시 실패/cleanup 처리하지 않고 계속 대기합니다.';
+                } elseif ($processName !== null && $status === null) {
                     $this->stderr[] = 'PM2 프로세스 상태를 확인할 수 없습니다: ' . $processName . ' (attempt=' . $attempt . ')';
-                } else {
+                } elseif ($status !== null && $status !== 'online') {
                     $this->stderr[] = 'PM2 프로세스가 online 상태가 아닙니다: ' . $processName . ' status=' . $status . ' (attempt=' . $attempt . ')';
                 }
             }
@@ -451,13 +508,45 @@ final class DeployService
             }
         }
 
-        $this->stderr[] = '포트 LISTEN 대기 시간이 초과되었습니다: ' . $port
-            . ' (attempts=' . $maxAttempts . ', interval=' . $intervalSeconds . 's, max_wait=' . $maxWaitSeconds . 's)';
+        $finalDetails = $this->portReadinessDetails($port);
+        if ((bool) $finalDetails['ready']) {
+            $this->stdout[] = '[PORT_CHECK_SUCCESS] port=' . $port
+                . ' pid=' . ($finalDetails['pid'] ?? 'unknown')
+                . ' source=' . (string) $finalDetails['source']
+                . ' attempt=final'
+                . ' detail=' . (string) $finalDetails['detail'];
+            return true;
+        }
+
+        $this->stderr[] = '[PORT_CHECK_TIMEOUT] port=' . $port
+            . ' attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's'
+            . ' max_wait=' . $maxWaitSeconds . 's'
+            . ' probes=' . (string) $finalDetails['detail'];
         if ($processName !== null && $cwd !== null) {
             $this->appendPm2Diagnostics($processName, $cwd, '포트 LISTEN timeout 후 PM2 상태');
         }
 
         return false;
+    }
+
+    private function shouldCleanupAfterPortFailure(string $processName, string $cwd, int $port): bool
+    {
+        $details = $this->portReadinessDetails($port);
+        if ((bool) $details['ready']) {
+            $this->stdout[] = '[PORT_CHECK_SUCCESS] cleanup 직전 재확인 성공: port=' . $port
+                . ' pid=' . ($details['pid'] ?? 'unknown')
+                . ' source=' . (string) $details['source'];
+            return false;
+        }
+
+        $status = $this->pm2ProcessStatus($processName, $cwd);
+        $this->stderr[] = '[CLEANUP_DECISION] port=' . $port
+            . ' pm2=' . $processName
+            . ' pm2_status=' . ($status ?? 'unknown')
+            . ' port_ready=no';
+
+        return $status === 'stopped' || $status === 'errored' || $status === 'stopping';
     }
 
     private function pm2ProcessStatus(string $processName, string $cwd): ?string
@@ -510,10 +599,87 @@ final class DeployService
 
     private function isPortListening(int $port): bool
     {
-        $command = 'lsof -nP -iTCP:' . $port . ' -sTCP:LISTEN -t >/dev/null 2>&1';
-        exec($command, $output, $code);
+        return (bool) $this->portReadinessDetails($port)['ready'];
+    }
 
-        return $code === 0;
+    /**
+     * @return array{ready:bool,pid:?string,source:string,detail:string}
+     */
+    private function portReadinessDetails(int $port): array
+    {
+        $checks = [];
+
+        $lsofOutput = [];
+        $lsofCode = 0;
+        exec('lsof -nP -iTCP:' . $port . ' -sTCP:LISTEN -t 2>/dev/null', $lsofOutput, $lsofCode);
+        $pids = array_values(array_filter(array_map('trim', $lsofOutput), static fn (string $pid): bool => $pid !== ''));
+        $checks[] = 'lsof_code=' . $lsofCode . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
+        if ($lsofCode === 0 && $pids !== []) {
+            return [
+                'ready' => true,
+                'pid' => $pids[0],
+                'source' => 'lsof',
+                'detail' => implode('; ', $checks),
+            ];
+        }
+
+        $ssOutput = [];
+        $ssCode = 0;
+        exec('ss -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $ssOutput, $ssCode);
+        $checks[] = 'ss_code=' . $ssCode . ' lines=' . count($ssOutput);
+        if ($ssCode === 0 && $ssOutput !== []) {
+            return [
+                'ready' => true,
+                'pid' => $this->pidFromSocketLine($ssOutput[0] ?? ''),
+                'source' => 'ss',
+                'detail' => implode('; ', $checks),
+            ];
+        }
+
+        $netstatOutput = [];
+        $netstatCode = 0;
+        exec('netstat -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $netstatOutput, $netstatCode);
+        $checks[] = 'netstat_code=' . $netstatCode . ' lines=' . count($netstatOutput);
+        if ($netstatCode === 0 && $netstatOutput !== []) {
+            return [
+                'ready' => true,
+                'pid' => $this->pidFromSocketLine($netstatOutput[0] ?? ''),
+                'source' => 'netstat',
+                'detail' => implode('; ', $checks),
+            ];
+        }
+
+        $tcpOutput = [];
+        $tcpCode = 0;
+        exec('timeout 2s bash -lc ' . escapeshellarg('</dev/tcp/127.0.0.1/' . $port), $tcpOutput, $tcpCode);
+        $checks[] = 'tcp_connect_code=' . $tcpCode;
+        if ($tcpCode === 0) {
+            return [
+                'ready' => true,
+                'pid' => null,
+                'source' => 'tcp_connect',
+                'detail' => implode('; ', $checks),
+            ];
+        }
+
+        return [
+            'ready' => false,
+            'pid' => null,
+            'source' => 'none',
+            'detail' => implode('; ', $checks),
+        ];
+    }
+
+    private function pidFromSocketLine(string $line): ?string
+    {
+        if (preg_match('/pid=(\d+)/', $line, $matches) === 1) {
+            return $matches[1];
+        }
+        if (preg_match('#\s(\d+)/[^\s]+#', $line, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
     }
 
     private function pm2ProcessName(array $project): string
