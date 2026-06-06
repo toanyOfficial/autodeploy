@@ -65,7 +65,55 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
     <?php endif; ?>
 
     <?php if (!empty($isDeploying)): ?>
-        <div class="deploy-banner">배포가 진행 중이에요. 최신버전 빌드, 안정화버전 빌드, 재시작, 특정버전 배포 버튼이 잠시 쉬어갑니다.</div>
+        <?php
+            $deploymentProjects = $deploymentStatus['projects'] ?? [];
+            $runningProjects = array_values(array_filter($deploymentProjects, static fn (array $item): bool => ($item['state'] ?? '') === 'running'));
+            $successProjects = array_values(array_filter($deploymentProjects, static fn (array $item): bool => ($item['state'] ?? '') === 'success'));
+            $pendingProjects = array_values(array_filter($deploymentProjects, static fn (array $item): bool => ($item['state'] ?? '') === 'pending'));
+            $primaryRunning = $runningProjects[0]['project_name'] ?? '프로젝트';
+        ?>
+        <div class="deploy-progress-overlay" data-deploy-progress-overlay data-server-deploying="true" aria-live="polite">
+            <div class="deploy-progress-card" role="status">
+                <span class="deploy-progress-spinner" aria-hidden="true"></span>
+                <div class="deploy-progress-content">
+                    <p class="eyebrow">배포 진행중</p>
+                    <strong><span data-deploy-progress-project><?= htmlspecialchars($primaryRunning, ENT_QUOTES, 'UTF-8') ?></span> 프로젝트가 빌드중입니다.</strong>
+                    <small>스크롤 위치와 상관없이 현재 배포 상태를 이 창 하나에서 확인할 수 있어요.</small>
+                    <div class="deploy-progress-status-list" data-deploy-progress-status-list>
+                        <?php if (!empty($successProjects)): ?>
+                            <div class="deploy-progress-status-group" data-state="success">
+                                <span>배포성공</span>
+                                <ul>
+                                    <?php foreach ($successProjects as $item): ?>
+                                        <li><?= htmlspecialchars($item['project_name'] ?? '프로젝트', ENT_QUOTES, 'UTF-8') ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </div>
+                        <?php endif; ?>
+                        <?php if (!empty($runningProjects)): ?>
+                            <div class="deploy-progress-status-group" data-state="running">
+                                <span>배포중</span>
+                                <ul>
+                                    <?php foreach ($runningProjects as $item): ?>
+                                        <li><?= htmlspecialchars($item['project_name'] ?? '프로젝트', ENT_QUOTES, 'UTF-8') ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </div>
+                        <?php endif; ?>
+                        <?php if (!empty($pendingProjects)): ?>
+                            <div class="deploy-progress-status-group" data-state="pending">
+                                <span>배포대기</span>
+                                <ul>
+                                    <?php foreach ($pendingProjects as $item): ?>
+                                        <li><?= htmlspecialchars($item['project_name'] ?? '프로젝트', ENT_QUOTES, 'UTF-8') ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
     <?php endif; ?>
 
     <div class="deploy-feedback" data-deploy-feedback hidden></div>
