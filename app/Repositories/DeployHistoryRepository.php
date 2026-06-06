@@ -43,6 +43,22 @@ final class DeployHistoryRepository extends BaseRepository
         return $row !== null;
     }
 
+
+    public function running(?int $limit = null): array
+    {
+        $sql = 'SELECT h.*, p.project_name, p.project_key'
+            . ' FROM ' . DeployHistory::TABLE . ' h'
+            . ' INNER JOIN deploy_project p ON p.id = h.project_id'
+            . " WHERE h.deploy_status = 'running'"
+            . ' ORDER BY COALESCE(h.started_at, h.created_at) ASC, h.id ASC';
+
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . (int) $limit;
+        }
+
+        return $this->fetchAll($sql);
+    }
+
     public function find(int $id): ?array
     {
         return $this->fetchOne('SELECT * FROM ' . DeployHistory::TABLE . ' WHERE id = :id', ['id' => $id]);

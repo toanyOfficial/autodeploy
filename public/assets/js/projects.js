@@ -496,21 +496,33 @@ function setDeployButtonsDisabled(disabled) {
 }
 
 async function refreshDashboardContent() {
-  const response = await fetch(window.location.href, { credentials: 'same-origin' });
-  const html = await response.text();
-  const next = new DOMParser().parseFromString(html, 'text/html');
-  const currentGrid = document.querySelector('.project-grid');
-  const nextGrid = next.querySelector('.project-grid');
-  const currentGlobalTools = document.querySelector('.global-developer-tools');
-  const nextGlobalTools = next.querySelector('.global-developer-tools');
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 15000);
 
-  if (currentGrid && nextGrid) {
-    currentGrid.replaceWith(nextGrid);
-    bindProjectInteractions(nextGrid);
-  }
-  if (currentGlobalTools && nextGlobalTools) {
-    currentGlobalTools.replaceWith(nextGlobalTools);
-    bindProjectInteractions(nextGlobalTools);
+  try {
+    const response = await fetch(window.location.href, {
+      credentials: 'same-origin',
+      signal: controller.signal,
+    });
+    const html = await response.text();
+    const next = new DOMParser().parseFromString(html, 'text/html');
+    const currentGrid = document.querySelector('.project-grid');
+    const nextGrid = next.querySelector('.project-grid');
+    const currentGlobalTools = document.querySelector('.global-developer-tools');
+    const nextGlobalTools = next.querySelector('.global-developer-tools');
+
+    if (currentGrid && nextGrid) {
+      currentGrid.replaceWith(nextGrid);
+      bindProjectInteractions(nextGrid);
+    }
+    if (currentGlobalTools && nextGlobalTools) {
+      currentGlobalTools.replaceWith(nextGlobalTools);
+      bindProjectInteractions(nextGlobalTools);
+    }
+  } catch (error) {
+    console.warn('dashboard refresh failed after deploy', error);
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 

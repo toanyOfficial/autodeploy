@@ -10,7 +10,7 @@ final class DeployService
 {
     private const PROJECT_TIMEOUT_SECONDS = 600;
     private const COMMAND_TIMEOUT_SECONDS = 300;
-    private const STALE_RUNNING_SECONDS = 600;
+    private const STALE_RUNNING_SECONDS = 720;
     private const AUTO_DEPLOY_PORT = 9090;
     private const DEFAULT_PORT_LISTEN_ATTEMPTS = 30;
     private const NEXTJS_BUN_PORT_LISTEN_ATTEMPTS = 90;
@@ -68,19 +68,38 @@ final class DeployService
 
     public function isDeploying(): bool
     {
-        $this->histories->failStaleRunning(self::STALE_RUNNING_SECONDS);
+        return (bool) $this->deploymentStatus()['deploying'];
+    }
 
-        return $this->lock->isLocked() || $this->histories->hasRunning();
+    /**
+     * @return array{deploying:bool,locked:bool,has_running:bool,stale_failed:int,stale_after_seconds:int,running:array<int,array<string,mixed>>}
+     */
+    public function deploymentStatus(): array
+    {
+        $staleFailed = $this->histories->failStaleRunning(self::STALE_RUNNING_SECONDS);
+        $running = $this->histories->running(10);
+        $locked = $this->lock->isLocked();
+
+        return [
+            'deploying' => $locked || $running !== [],
+            'locked' => $locked,
+            'has_running' => $running !== [],
+            'stale_failed' => $staleFailed,
+            'stale_after_seconds' => self::STALE_RUNNING_SECONDS,
+            'running' => $running,
+        ];
     }
 
     private function deploy(int $projectId, ?array $version, string $targetRef, string $deployType): array
     {
+        $this->prepareLongRunningExecution();
         if (!$this->lock->acquire()) {
             throw new \RuntimeException('다른 배포가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
         }
 
         $history = null;
         $project = null;
+        $reportFile = null;
         $this->stdout = [];
         $this->stderr = [];
         $this->failureReason = null;
@@ -107,18 +126,12 @@ final class DeployService
             $deployedCommit = $success ? $this->currentCommit((string) $project['server_path']) : null;
             $status = $success ? 'success' : 'failed';
             $endedAt = $this->now();
-            $reportFile = $this->reports->createReport($project, [
-                'started_at' => $startedAt,
-                'ended_at' => $endedAt,
-                'deploy_type' => $deployType,
-                'version_name' => $version['version_name'] ?? '최신 main',
-                'requested_commit_hash' => $targetRef,
-                'deployed_commit_hash' => $deployedCommit,
-                'result' => $status,
-                'stdout' => implode(PHP_EOL, $this->stdout),
-                'stderr' => implode(PHP_EOL, $this->stderr),
-                'failure_reason' => $this->failureReason,
-            ]);
+            $this->stdout[] = '런타임 플로우 종료: status=' . $status . ' deployed_commit=' . ($deployedCommit ?? '(none)');
+            $this->stdout[] = 'deploy_history 업데이트 예정: id=' . (int) $history['id'] . ' status=' . $status . ' ended_at=' . $endedAt;
+
+            $reportData = $this->reportData($startedAt, $endedAt, $deployType, $version, $targetRef, $deployedCommit, $status);
+            $reportFile = $this->reports->createReport($project, $reportData);
+            $this->stdout[] = '리포트 파일 생성: ' . $reportFile;
 
             $updated = $this->histories->update((int) $history['id'], [
                 'deploy_status' => $status,
@@ -126,37 +139,112 @@ final class DeployService
                 'ended_at' => $endedAt,
                 'report_file' => $reportFile,
             ]);
-            $this->reports->pruneProjectReports($project);
+            $finalHistory = $updated ?? $history;
+            $this->stdout[] = 'deploy_history 업데이트 완료: id=' . (int) ($finalHistory['id'] ?? $history['id'])
+                . ' status=' . (string) ($finalHistory['deploy_status'] ?? $status)
+                . ' ended_at=' . (string) ($finalHistory['ended_at'] ?? $endedAt)
+                . ' report_file=' . $reportFile;
+            $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
+            $this->reports->writeReport($reportFile, $project, $this->reportData($startedAt, $endedAt, $deployType, $version, $targetRef, $deployedCommit, $status, $reportFile));
+            $this->pruneReportsSafely($project);
 
-            return $updated ?? $history;
+            return $finalHistory;
         } catch (\Throwable $throwable) {
             $this->failureReason = $this->failureReason ?? $throwable->getMessage();
             if ($history !== null && $project !== null) {
                 $endedAt = $this->now();
-                $reportFile = $this->reports->createReport($project, [
-                    'started_at' => $history['started_at'] ?? '',
-                    'ended_at' => $endedAt,
-                    'deploy_type' => $deployType,
-                    'version_name' => $version['version_name'] ?? '최신 main',
-                    'requested_commit_hash' => $targetRef,
-                    'deployed_commit_hash' => null,
-                    'result' => 'failed',
-                    'stdout' => implode(PHP_EOL, $this->stdout),
-                    'stderr' => implode(PHP_EOL, $this->stderr),
-                    'failure_reason' => $this->failureReason,
-                ]);
-                $this->histories->update((int) $history['id'], [
+                $this->stderr[] = '배포 예외 발생: ' . $throwable->getMessage() . ' file=' . $throwable->getFile() . ' line=' . $throwable->getLine();
+                $this->stdout[] = 'deploy_history 실패 업데이트 예정: id=' . (int) $history['id'] . ' ended_at=' . $endedAt;
+                $reportFile = $this->reports->createReport($project, $this->reportData(
+                    (string) ($history['started_at'] ?? ''),
+                    $endedAt,
+                    $deployType,
+                    $version,
+                    $targetRef,
+                    null,
+                    'failed'
+                ));
+                $this->stdout[] = '리포트 파일 생성: ' . $reportFile;
+                $updated = $this->histories->update((int) $history['id'], [
                     'deploy_status' => 'failed',
                     'ended_at' => $endedAt,
                     'report_file' => $reportFile,
                 ]);
-                $this->reports->pruneProjectReports($project);
+                $this->stdout[] = 'deploy_history 실패 업데이트 완료: id=' . (int) ($updated['id'] ?? $history['id'])
+                    . ' status=' . (string) ($updated['deploy_status'] ?? 'failed')
+                    . ' ended_at=' . (string) ($updated['ended_at'] ?? $endedAt)
+                    . ' report_file=' . $reportFile;
+                $this->stdout[] = 'DeploymentLock release 예정: currently_locked=' . ($this->lock->isLocked() ? 'yes' : 'no');
+                $this->reports->writeReport($reportFile, $project, $this->reportData(
+                    (string) ($history['started_at'] ?? ''),
+                    $endedAt,
+                    $deployType,
+                    $version,
+                    $targetRef,
+                    null,
+                    'failed',
+                    $reportFile
+                ));
+                $this->pruneReportsSafely($project);
             }
             throw $throwable;
         } finally {
             $this->deadlineAt = null;
             $this->lock->release();
+            if (is_string($reportFile) && $reportFile !== '') {
+                @file_put_contents(
+                    $reportFile,
+                    PHP_EOL . '[finalize] DeploymentLock release 완료: currently_locked='
+                    . ($this->lock->isLocked() ? 'yes' : 'no') . PHP_EOL,
+                    FILE_APPEND
+                );
+            }
         }
+    }
+
+    private function pruneReportsSafely(array $project): void
+    {
+        try {
+            $this->reports->pruneProjectReports($project);
+        } catch (\Throwable $throwable) {
+            $this->stderr[] = '리포트 정리 실패(배포 결과는 유지): ' . $throwable->getMessage();
+        }
+    }
+
+    private function prepareLongRunningExecution(): void
+    {
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
+        }
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(self::PROJECT_TIMEOUT_SECONDS + 120);
+        }
+    }
+
+    private function reportData(
+        string $startedAt,
+        string $endedAt,
+        string $deployType,
+        ?array $version,
+        string $targetRef,
+        ?string $deployedCommit,
+        string $status,
+        ?string $reportFile = null
+    ): array {
+        return [
+            'started_at' => $startedAt,
+            'ended_at' => $endedAt,
+            'deploy_type' => $deployType,
+            'version_name' => $version['version_name'] ?? '최신 main',
+            'requested_commit_hash' => $targetRef,
+            'deployed_commit_hash' => $deployedCommit,
+            'result' => $status,
+            'report_file' => $reportFile,
+            'stdout' => implode(PHP_EOL, $this->stdout),
+            'stderr' => implode(PHP_EOL, $this->stderr),
+            'failure_reason' => $this->failureReason,
+        ];
     }
 
     private function runRuntimeFlow(array $project, string $targetRef): bool

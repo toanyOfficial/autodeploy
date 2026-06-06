@@ -24,9 +24,15 @@ final class ReportService
         }
 
         $path = $projectDir . '/' . date('Ymd_His') . '.txt';
-        file_put_contents($path, $this->formatReport($project, $data));
+        $this->writeReport($path, $project, $data);
 
         return $path;
+    }
+
+    public function writeReport(string $path, array $project, array $data): void
+    {
+        $data['report_file'] = $data['report_file'] ?? $path;
+        file_put_contents($path, $this->formatReport($project, $data));
     }
 
     public function pruneProjectReports(array $project): void
@@ -88,6 +94,7 @@ final class ReportService
             '요청 Commit Hash: ' . ($data['requested_commit_hash'] ?? ''),
             '실제 배포 Commit Hash: ' . ($data['deployed_commit_hash'] ?? ''),
             '실행 결과: ' . ($data['result'] ?? ''),
+            '리포트 파일: ' . ($data['report_file'] ?? ''),
             '',
             '[stdout]',
             $stdout === '' ? '(없음)' : $stdout,

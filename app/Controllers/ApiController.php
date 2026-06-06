@@ -426,7 +426,7 @@ final class ApiController
 
     public function deployStatus(): void
     {
-        Response::json(['deploying' => (new DeployService())->isDeploying()]);
+        Response::json((new DeployService())->deploymentStatus());
     }
 
     public function deployLatest(int $projectId): void
