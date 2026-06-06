@@ -112,6 +112,7 @@ final class DeployService
             }
 
             $this->validateProject($project);
+            $targetRef = $this->targetRefForProject($project, $targetRef, $version);
             $this->validateGitRef($targetRef);
 
             $startedAt = $this->now();
@@ -119,6 +120,7 @@ final class DeployService
                 . ' project_id=' . $projectId
                 . ' project_key=' . (string) ($project['project_key'] ?? '')
                 . ' runtime=' . (string) ($project['runtime_type'] ?? '')
+                . ' branch=' . (string) ($project['branch_name'] ?? '')
                 . ' path=' . (string) ($project['server_path'] ?? '')
                 . ' expected_port=' . (int) ($project['port'] ?? 0)
                 . ' target_ref=' . $targetRef;
@@ -278,71 +280,65 @@ final class DeployService
         }
 
         if ($runtime === 'nextjs_bun') {
-            $processName = $this->pm2ProcessName($project);
-            $this->logProjectPortConfiguration($project, $processName);
-            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s path=%s port=%d pm2=%s',
+            $this->logProjectPortConfiguration($project, 'nohup');
+            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s start_mode=nohup path=%s port=%d',
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
                 $runtime,
                 $path,
-                $port,
-                $processName
+                $port
             );
-            $this->stdout[] = '[STEP] npm ci';
-            if (!$this->runCommand(['npm', 'ci'], $path)) {
-                return $this->fail('npm ci 실패: 기존 서비스는 종료하지 않습니다.');
+
+            $this->stdout[] = '[STEP] release only this project port before build/start';
+            if (!$this->releaseProjectPort($port)) {
+                return $this->fail('프로젝트 포트 해제 실패: ' . $port);
             }
+
             $this->stdout[] = '[STEP] clean .next';
             if (!$this->runShellCommand('rm -rf .next', $path)) {
-                return $this->fail('rm -rf .next 실패: 기존 서비스는 종료하지 않습니다.');
+                return $this->fail('rm -rf .next 실패');
             }
             $this->stdout[] = '[STEP] bun run build';
             if (!$this->runCommand(['bun', 'run', 'build'], $path)) {
-                return $this->fail('bun run build 실패: 기존 서비스는 종료하지 않습니다.');
+                return $this->fail('bun run build 실패');
             }
 
-            $this->stdout[] = '[STEP] stop only this project process/port';
-            if (!$this->deletePm2Process($processName, $path)) {
-                return $this->fail('pm2 기존 프로세스 종료 실패: ' . $processName);
-            }
-            if (!$this->stopProjectPort($port)) {
-                return $this->fail('프로젝트 포트 종료 실패: ' . $port);
-            }
-
-            $this->stdout[] = '[STEP] pm2 start only this project: ' . $processName;
-            $pm2Command = 'env PORT=' . escapeshellarg((string) $port)
-                . ' pm2 start bun --name ' . escapeshellarg($processName) . ' -- run start -H 0.0.0.0';
-            $this->stdout[] = '[PM2_START] at=' . $this->now()
-                . ' pm2=' . $processName
+            $startCommand = $this->nextjsBunStartCommand($port);
+            $this->stdout[] = '[NOHUP_START] at=' . $this->now()
                 . ' cwd=' . $path
                 . ' expected_port=' . $port
-                . ' command=' . $pm2Command;
-            if (!$this->runLoginShellCommand($pm2Command, $path)) {
-                $this->cleanupProjectRuntime($project, $path, $port, 'pm2_start_failure');
-                return $this->fail('pm2 서비스 시작 실패: ' . $processName);
+                . ' app_log=' . rtrim($path, '/') . '/app.log'
+                . ' command=' . $startCommand;
+            if (!$this->runLoginShellCommand($startCommand, $path)) {
+                return $this->fail('nohup 서비스 시작 실패: port=' . $port);
             }
+            $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
+
             if (!$this->waitForProjectPortListening(
                 $port,
                 self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS,
-                self::PORT_LISTEN_INTERVAL_SECONDS,
-                $processName,
-                $path
+                self::PORT_LISTEN_INTERVAL_SECONDS
             )) {
-                $this->appendPm2Diagnostics($processName, $path, '포트 LISTEN 실패 직전');
-                if ($this->shouldCleanupAfterPortFailure($processName, $path, $port)) {
-                    $this->cleanupProjectRuntime($project, $path, $port, 'port_listen_failure');
-                } else {
-                    $this->stderr[] = 'PM2 프로세스가 아직 살아 있어 실패 cleanup을 건너뜁니다: pm2=' . $processName . ' port=' . $port;
-                }
-                return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (pm2=' . $processName . ')');
+                return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (runtime=nextjs_bun start_mode=nohup)');
             }
-            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] pm2=' . $processName . ' port=' . $port;
-            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: ' . $processName . ' port=' . $port;
+            if (!$this->waitForHttpResponse(
+                $port,
+                self::DEFAULT_PORT_LISTEN_ATTEMPTS,
+                self::PORT_LISTEN_INTERVAL_SECONDS
+            )) {
+                $this->stderr[] = 'HTTP 응답 확인 실패는 포트 기동 실패와 분리해서 기록합니다: port=' . $port . ' (runtime=nextjs_bun start_mode=nohup)';
+            }
+            if ($this->appLogHasAddressInUse($path)) {
+                return $this->fail('app.log에서 EADDRINUSE가 확인되었습니다: ' . rtrim($path, '/') . '/app.log');
+            }
+
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=nextjs_bun start_mode=nohup port=' . $port;
+            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: runtime=nextjs_bun start_mode=nohup port=' . $port;
             return true;
         }
 
         if ($runtime === 'python_static') {
-            $this->logProjectPortConfiguration($project, null);
+            $this->logProjectPortConfiguration($project, 'nohup');
             $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s path=%s port=%d',
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
@@ -373,6 +369,20 @@ final class DeployService
         }
 
         throw new \RuntimeException('지원하지 않는 runtime_type 입니다: ' . $runtime);
+    }
+
+    private function targetRefForProject(array $project, string $targetRef, ?array $version): string
+    {
+        if ($version !== null) {
+            return $targetRef;
+        }
+
+        $branchName = trim((string) ($project['branch_name'] ?? 'main'));
+        if ($branchName === '') {
+            $branchName = 'main';
+        }
+
+        return 'origin/' . $branchName;
     }
 
     private function validateProject(array $project): void
@@ -412,52 +422,169 @@ final class DeployService
         return $this->runShellCommand('pids=$(lsof -ti tcp:' . $port . ' 2>/dev/null || true); if [ -n "$pids" ]; then kill $pids; fi', null);
     }
 
-    private function deletePm2Process(string $processName, string $cwd): bool
+    private function releaseProjectPort(int $port, int $maxWaitSeconds = 30): bool
     {
-        $this->stdout[] = 'PM2 프로세스만 종료합니다: ' . $processName;
-        return $this->runLoginShellCommand('pm2 delete ' . escapeshellarg($processName) . ' >/dev/null 2>&1 || true', $cwd);
+        if ($port === self::AUTO_DEPLOY_PORT) {
+            $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port . ' reason=auto_deploy_protected';
+            return false;
+        }
+
+        $this->stdout[] = '[PORT_RELEASE_START] port=' . $port . ' max_wait=' . $maxWaitSeconds . 's interval=1s';
+        $pids = $this->portPids($port);
+        if ($pids === []) {
+            $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' already_free=yes';
+            return true;
+        }
+
+        $this->terminatePids($pids, 'TERM');
+        $sigkillAttempt = max(1, (int) floor($maxWaitSeconds / 2));
+
+        for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
+            sleep(1);
+            $pids = $this->portPids($port);
+            if ($pids === []) {
+                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt;
+                return true;
+            }
+
+            $this->stdout[] = '[PORT_RELEASE_WAIT] port=' . $port
+                . ' attempt=' . $attempt . '/' . $maxWaitSeconds
+                . ' pids=' . implode(',', $pids);
+
+            if ($attempt === $sigkillAttempt) {
+                $this->terminatePids($pids, 'KILL');
+            }
+        }
+
+        $pids = $this->portPids($port);
+        $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
+            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
+
+        return $pids === [];
     }
 
-    private function cleanupProjectRuntime(array $project, string $cwd, int $port, string $reason): void
+    /**
+     * @return array<int,string>
+     */
+    private function portPids(int $port): array
     {
-        $processName = $this->pm2ProcessName($project);
-        $snapshot = $this->pm2ProcessSnapshot($processName, $cwd);
-        $this->stderr[] = '[CLEANUP_START] at=' . $this->now()
-            . ' reason=' . $reason
-            . ' pm2=' . $processName
-            . ' pm2_status=' . ($snapshot['status'] ?? 'unknown')
-            . ' pm2_pid=' . ($snapshot['pid'] ?? 'unknown')
-            . ' expected_port=' . $port
-            . ' listen=' . $this->listeningPortsSummary($port, $snapshot['pid'] ?? null);
-        $this->appendPm2Diagnostics($processName, $cwd, 'cleanup 전 PM2 상태');
-        $this->deletePm2Process($processName, $cwd);
-        $this->stopProjectPort($port);
-        $this->stderr[] = '[CLEANUP_END] at=' . $this->now()
-            . ' reason=' . $reason
-            . ' pm2=' . $processName
-            . ' expected_port=' . $port
-            . ' listen=' . $this->listeningPortsSummary($port, $snapshot['pid'] ?? null);
+        $output = [];
+        $code = 0;
+        exec('lsof -ti tcp:' . $port . ' 2>/dev/null || true', $output, $code);
+
+        return array_values(array_filter(array_map('trim', $output), static function (string $pid): bool {
+            return preg_match('/^\d+$/', $pid) === 1;
+        }));
     }
 
-    private function waitForProjectPortListening(
-        int $port,
-        int $maxAttempts,
-        int $intervalSeconds,
-        ?string $processName = null,
-        ?string $cwd = null
-    ): bool {
+    /**
+     * @param array<int,string> $pids
+     */
+    private function terminatePids(array $pids, string $signal): void
+    {
+        $pids = array_values(array_filter($pids, static function (string $pid): bool {
+            return preg_match('/^\d+$/', $pid) === 1;
+        }));
+        if ($pids === []) {
+            return;
+        }
+
+        $signal = strtoupper($signal) === 'KILL' ? 'KILL' : 'TERM';
+        $this->stdout[] = '[PORT_RELEASE_KILL] signal=' . $signal . ' pid=' . implode(',', $pids);
+        exec('kill -s ' . $signal . ' ' . implode(' ', array_map('escapeshellarg', $pids)) . ' 2>/dev/null || true');
+    }
+
+    private function nextjsBunStartCommand(int $port): string
+    {
+        return 'nohup env PORT=' . escapeshellarg((string) $port)
+            . ' bun run start -H 0.0.0.0 > app.log 2>&1 &';
+    }
+
+    private function appLogHasAddressInUse(string $path): bool
+    {
+        $appLog = rtrim($path, '/') . '/app.log';
+        if (!is_file($appLog) || !is_readable($appLog)) {
+            $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=no eaddrinuse=unknown';
+            return false;
+        }
+
+        $content = file_get_contents($appLog);
+        $hasError = is_string($content) && str_contains($content, 'EADDRINUSE');
+        $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=yes eaddrinuse=' . ($hasError ? 'yes' : 'no');
+
+        return $hasError;
+    }
+
+    private function waitForHttpResponse(int $port, int $maxAttempts, int $intervalSeconds): bool
+    {
+        $url = 'http://127.0.0.1:' . $port . '/';
+        $this->stdout[] = '[HTTP_CHECK_START] url=' . $url
+            . ' max_attempts=' . $maxAttempts
+            . ' interval=' . $intervalSeconds . 's';
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            if (!$this->ensureProjectTimeRemaining('HTTP 응답 확인')) {
+                $this->stderr[] = '[HTTP_CHECK_FAIL] url=' . $url . ' reason=project_timeout attempt=' . $attempt . '/' . $maxAttempts;
+                return false;
+            }
+
+            $result = $this->httpStatusCode($url);
+            $statusCode = (int) $result['status_code'];
+            if ($statusCode > 0) {
+                $label = $statusCode >= 500 ? '[HTTP_CHECK_RESPONSE_WITH_APP_ERROR]' : '[HTTP_CHECK_SUCCESS]';
+                $this->stdout[] = $label . ' url=' . $url
+                    . ' status=' . $statusCode
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+                return true;
+            }
+
+            if ($attempt === 1 || $attempt % 5 === 0 || $attempt === $maxAttempts) {
+                $this->stdout[] = '[HTTP_CHECK_WAIT] url=' . $url
+                    . ' status=' . ($statusCode > 0 ? (string) $statusCode : 'none')
+                    . ' curl_exit=' . (int) $result['exit_code']
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+            }
+
+            $remaining = $this->remainingProjectSeconds();
+            if ($attempt < $maxAttempts && $remaining > 0) {
+                sleep(min($intervalSeconds, $remaining));
+            }
+        }
+
+        $result = $this->httpStatusCode($url);
+        $this->stderr[] = '[HTTP_CHECK_FAIL] url=' . $url
+            . ' status=' . (((int) $result['status_code']) > 0 ? (string) $result['status_code'] : 'none')
+            . ' curl_exit=' . (int) $result['exit_code'];
+
+        return false;
+    }
+
+    /**
+     * @return array{status_code:int,exit_code:int}
+     */
+    private function httpStatusCode(string $url): array
+    {
+        $output = [];
+        $code = 0;
+        exec('curl -sS --max-time 5 -o /dev/null -w "%{http_code}" ' . escapeshellarg($url) . ' 2>/dev/null', $output, $code);
+        $statusCode = isset($output[0]) ? (int) trim((string) $output[0]) : 0;
+
+        return [
+            'status_code' => $statusCode,
+            'exit_code' => $code,
+        ];
+    }
+
+    private function waitForProjectPortListening(int $port, int $maxAttempts, int $intervalSeconds): bool
+    {
         $maxWaitSeconds = $maxAttempts * $intervalSeconds;
         $this->stdout[] = '[PORT_CHECK_START] port=' . $port
             . ' max_attempts=' . $maxAttempts
             . ' interval=' . $intervalSeconds . 's'
-            . ' max_wait=' . $maxWaitSeconds . 's'
-            . ($processName !== null ? ' pm2=' . $processName : '');
+            . ' max_wait=' . $maxWaitSeconds . 's';
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             if (!$this->ensureProjectTimeRemaining('포트 LISTEN 확인')) {
-                if ($processName !== null && $cwd !== null) {
-                    $this->appendPm2Diagnostics($processName, $cwd, '프로젝트 타임아웃으로 포트 확인 중단');
-                }
                 $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port . ' reason=project_timeout attempt=' . $attempt . '/' . $maxAttempts;
                 return false;
             }
@@ -473,27 +600,10 @@ final class DeployService
             }
 
             if ($attempt === 1 || $attempt % 10 === 0 || $attempt === $maxAttempts) {
-                $snapshot = ($processName !== null && $cwd !== null) ? $this->pm2ProcessSnapshot($processName, $cwd) : null;
-                $status = $snapshot['status'] ?? null;
                 $this->stdout[] = '[PORT_CHECK_WAIT] port=' . $port
                     . ' attempt=' . $attempt . '/' . $maxAttempts
-                    . ($processName !== null ? ' pm2=' . $processName : '')
-                    . ' pm2_status=' . ($status ?? 'n/a')
-                    . ' pm2_pid=' . ($snapshot['pid'] ?? 'n/a')
-                    . ' listen=' . $this->listeningPortsSummary($port, $snapshot['pid'] ?? null)
+                    . ' listen=' . $this->listeningPortsSummary($port, null)
                     . ' probes=' . (string) $details['detail'];
-                if ($status === 'online') {
-                    $this->stdout[] = '[PM2_ONLINE] at=' . $this->now()
-                        . ' pm2=' . $processName
-                        . ' pm2_pid=' . ($snapshot['pid'] ?? 'unknown')
-                        . ' expected_port=' . $port
-                        . ' listen=' . $this->listeningPortsSummary($port, $snapshot['pid'] ?? null);
-                    $this->stdout[] = 'PM2 프로세스는 online 이지만 포트가 아직 확인되지 않았습니다. 즉시 실패/cleanup 처리하지 않고 계속 대기합니다.';
-                } elseif ($processName !== null && $status === null) {
-                    $this->stderr[] = 'PM2 프로세스 상태를 확인할 수 없습니다: ' . $processName . ' (attempt=' . $attempt . ')';
-                } elseif ($status !== null && $status !== 'online') {
-                    $this->stderr[] = 'PM2 프로세스가 online 상태가 아닙니다: ' . $processName . ' status=' . $status . ' (attempt=' . $attempt . ')';
-                }
             }
 
             $remaining = $this->remainingProjectSeconds();
@@ -512,101 +622,14 @@ final class DeployService
             return true;
         }
 
-        $finalSnapshot = ($processName !== null && $cwd !== null) ? $this->pm2ProcessSnapshot($processName, $cwd) : null;
         $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port
             . ' attempts=' . $maxAttempts
             . ' interval=' . $intervalSeconds . 's'
             . ' max_wait=' . $maxWaitSeconds . 's'
-            . ' pm2_status=' . ($finalSnapshot['status'] ?? 'n/a')
-            . ' pm2_pid=' . ($finalSnapshot['pid'] ?? 'n/a')
-            . ' listen=' . $this->listeningPortsSummary($port, $finalSnapshot['pid'] ?? null)
+            . ' listen=' . $this->listeningPortsSummary($port, null)
             . ' probes=' . (string) $finalDetails['detail'];
-        if ($processName !== null && $cwd !== null) {
-            $this->appendPm2Diagnostics($processName, $cwd, '포트 LISTEN timeout 후 PM2 상태');
-        }
 
         return false;
-    }
-
-    private function shouldCleanupAfterPortFailure(string $processName, string $cwd, int $port): bool
-    {
-        $details = $this->portReadinessDetails($port);
-        if ((bool) $details['ready']) {
-            $this->stdout[] = '[PORT_CHECK_SUCCESS] cleanup 직전 재확인 성공: port=' . $port
-                . ' pid=' . ($details['pid'] ?? 'unknown')
-                . ' source=' . (string) $details['source'];
-            return false;
-        }
-
-        $snapshot = $this->pm2ProcessSnapshot($processName, $cwd);
-        $status = $snapshot['status'] ?? null;
-        $this->stderr[] = '[CLEANUP_DECISION] port=' . $port
-            . ' pm2=' . $processName
-            . ' pm2_status=' . ($status ?? 'unknown')
-            . ' pm2_pid=' . ($snapshot['pid'] ?? 'unknown')
-            . ' listen=' . $this->listeningPortsSummary($port, $snapshot['pid'] ?? null)
-            . ' port_ready=no';
-
-        return $status === 'stopped' || $status === 'errored' || $status === 'stopping';
-    }
-
-    private function pm2ProcessStatus(string $processName, string $cwd): ?string
-    {
-        return $this->pm2ProcessSnapshot($processName, $cwd)['status'] ?? null;
-    }
-
-    /**
-     * @return array{status:?string,pid:?int}
-     */
-    private function pm2ProcessSnapshot(string $processName, string $cwd): array
-    {
-        $processes = $this->pm2ProcessList($cwd);
-        if ($processes === null) {
-            return ['status' => null, 'pid' => null];
-        }
-
-        foreach ($processes as $process) {
-            if (!is_array($process) || (string) ($process['name'] ?? '') !== $processName) {
-                continue;
-            }
-
-            $environment = $process['pm2_env'] ?? [];
-            $status = is_array($environment) ? (string) ($environment['status'] ?? 'unknown') : 'unknown';
-            $pid = isset($process['pid']) ? (int) $process['pid'] : null;
-
-            return ['status' => $status, 'pid' => $pid];
-        }
-
-        return ['status' => 'missing', 'pid' => null];
-    }
-
-    /**
-     * @return array<int,array<string,mixed>>|null
-     */
-    private function pm2ProcessList(string $cwd): ?array
-    {
-        $output = [];
-        $code = 0;
-        exec('cd ' . escapeshellarg($cwd) . ' && bash -lc ' . escapeshellarg('timeout --kill-after=2s 10s pm2 jlist 2>/dev/null'), $output, $code);
-        if ($code !== 0) {
-            return null;
-        }
-
-        $decoded = json_decode(implode(PHP_EOL, $output), true);
-        return is_array($decoded) ? $decoded : null;
-    }
-
-    private function appendPm2Diagnostics(string $processName, string $cwd, string $context): void
-    {
-        $output = [];
-        $code = 0;
-        $command = 'timeout --kill-after=2s 10s pm2 describe ' . escapeshellarg($processName) . ' 2>&1 | head -120';
-        exec('cd ' . escapeshellarg($cwd) . ' && bash -lc ' . escapeshellarg($command), $output, $code);
-
-        $this->stderr[] = '[PM2 DIAG] ' . $context . ' process=' . $processName . ' cwd=' . $cwd . ' exit_code=' . $code;
-        if ($output !== []) {
-            $this->stderr[] = implode(PHP_EOL, $output);
-        }
     }
 
     private function isPortListening(int $port): bool
@@ -694,14 +717,16 @@ final class DeployService
         return null;
     }
 
-    private function logProjectPortConfiguration(array $project, ?string $processName): void
+    private function logProjectPortConfiguration(array $project, string $startMode): void
     {
         $path = (string) $project['server_path'];
         $expectedPort = (int) $project['port'];
         $this->stdout[] = '[PORT_CONFIG] source=auto_deploy project_port=' . $expectedPort
             . ' runtime=' . (string) ($project['runtime_type'] ?? '')
-            . ' pm2=' . ($processName ?? 'n/a')
-            . ' path=' . $path;
+            . ' start_mode=' . $startMode
+            . ' branch=' . (string) ($project['branch_name'] ?? '')
+            . ' path=' . $path
+            . ' home=' . (string) (getenv('HOME') ?: '');
 
         foreach ($this->portEvidenceFiles($path) as $file) {
             $this->stdout[] = '[PORT_CONFIG] ' . $this->summarizePortEvidence($file);
@@ -761,7 +786,7 @@ final class DeployService
 
         if ($pid !== null && $pid > 0) {
             $ports = $this->listListeningPortsForPid($pid);
-            $parts[] = 'pm2_pid:' . $pid . '_ports=' . ($ports === [] ? 'none' : implode(',', $ports));
+            $parts[] = 'pid:' . $pid . '_ports=' . ($ports === [] ? 'none' : implode(',', $ports));
         }
 
         return implode(' ', $parts);
@@ -787,14 +812,6 @@ final class DeployService
         }
 
         return array_values(array_unique($ports));
-    }
-
-    private function pm2ProcessName(array $project): string
-    {
-        $name = (string) ($project['project_key'] ?? $project['project_name'] ?? ('project-' . ($project['id'] ?? 'unknown')));
-        $name = preg_replace('/[^A-Za-z0-9_.-]+/', '-', $name) ?: 'auto-deploy-project';
-
-        return trim($name, '-') ?: 'auto-deploy-project';
     }
 
     private function runLoginShellCommand(string $command, string $cwd): bool
