@@ -247,42 +247,6 @@ final class DeployService
         ];
     }
 
-    private function prepareLongRunningExecution(): void
-    {
-        if (function_exists('ignore_user_abort')) {
-            @ignore_user_abort(true);
-        }
-
-        if (function_exists('set_time_limit')) {
-            @set_time_limit(self::PROJECT_TIMEOUT_SECONDS + 120);
-        }
-    }
-
-    private function reportData(
-        string $startedAt,
-        string $endedAt,
-        string $deployType,
-        ?array $version,
-        string $targetRef,
-        ?string $deployedCommit,
-        string $status,
-        ?string $reportFile = null
-    ): array {
-        return [
-            'started_at' => $startedAt,
-            'ended_at' => $endedAt,
-            'deploy_type' => $deployType,
-            'version_name' => $version['version_name'] ?? '최신 main',
-            'requested_commit_hash' => $targetRef,
-            'deployed_commit_hash' => $deployedCommit,
-            'result' => $status,
-            'report_file' => $reportFile,
-            'stdout' => implode(PHP_EOL, $this->stdout),
-            'stderr' => implode(PHP_EOL, $this->stderr),
-            'failure_reason' => $this->failureReason,
-        ];
-    }
-
     private function runRuntimeFlow(array $project, string $targetRef): bool
     {
         $runtime = (string) $project['runtime_type'];
