@@ -171,8 +171,14 @@ final class DeployService
             }
 
             $this->stopPort($port);
-            if (!$this->runShellCommand('nohup env PORT=' . $port . ' bun run start -H 0.0.0.0 > app.log 2>&1 &', $path)) {
-                return $this->fail('bun 서비스 시작 실패');
+            $processName = $this->pm2ProcessName($project);
+            $pm2Command = 'pm2 delete ' . escapeshellarg($processName) . ' >/dev/null 2>&1 || true; '
+                . 'env PORT=' . escapeshellarg((string) $port) . ' pm2 start bun --name ' . escapeshellarg($processName) . ' -- run start -H 0.0.0.0';
+            if (!$this->runLoginShellCommand($pm2Command, $path)) {
+                return $this->fail('pm2 서비스 시작 실패');
+            }
+            if (!$this->waitForPortListening($port)) {
+                return $this->fail('포트 LISTEN 확인 실패: ' . $port);
             }
             return true;
         }
@@ -181,6 +187,9 @@ final class DeployService
             $this->stopPort($port);
             if (!$this->runShellCommand('nohup python3 -m http.server ' . $port . ' --bind 0.0.0.0 > app.log 2>&1 &', $path)) {
                 return $this->fail('python_static 서비스 시작 실패');
+            }
+            if (!$this->waitForPortListening($port)) {
+                return $this->fail('포트 LISTEN 확인 실패: ' . $port);
             }
             return true;
         }
@@ -214,6 +223,42 @@ final class DeployService
     private function stopPort(int $port): void
     {
         $this->runShellCommand('pids=$(lsof -ti tcp:' . $port . ' 2>/dev/null || true); if [ -n "$pids" ]; then kill $pids; fi', null);
+    }
+
+    private function waitForPortListening(int $port): bool
+    {
+        $this->stdout[] = '포트 LISTEN 확인 대기: ' . $port;
+        for ($attempt = 1; $attempt <= 30; $attempt++) {
+            if ($this->isPortListening($port)) {
+                $this->stdout[] = '포트가 LISTEN 상태입니다: ' . $port . ' (attempt=' . $attempt . ')';
+                return true;
+            }
+            sleep(2);
+        }
+
+        $this->stderr[] = '포트 LISTEN 대기 시간이 초과되었습니다: ' . $port;
+        return false;
+    }
+
+    private function isPortListening(int $port): bool
+    {
+        $command = 'lsof -nP -iTCP:' . $port . ' -sTCP:LISTEN -t >/dev/null 2>&1';
+        exec($command, $output, $code);
+
+        return $code === 0;
+    }
+
+    private function pm2ProcessName(array $project): string
+    {
+        $name = (string) ($project['project_key'] ?? $project['project_name'] ?? ('project-' . ($project['id'] ?? 'unknown')));
+        $name = preg_replace('/[^A-Za-z0-9_.-]+/', '-', $name) ?: 'auto-deploy-project';
+
+        return 'auto-deploy-' . trim($name, '-');
+    }
+
+    private function runLoginShellCommand(string $command, string $cwd): bool
+    {
+        return $this->runShellCommand('cd ' . escapeshellarg($cwd) . ' && bash -lc ' . escapeshellarg($command), null);
     }
 
     private function currentCommit(string $cwd): ?string
