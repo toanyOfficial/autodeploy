@@ -12,6 +12,19 @@ final class DeployService
     private const COMMAND_TIMEOUT_SECONDS = 300;
     private const STALE_RUNNING_SECONDS = 720;
     private const AUTO_DEPLOY_PORT = 9090;
+    private const PROJECT_ENV_UNSET_KEYS = [
+        'DB_HOST',
+        'DB_PORT',
+        'DB_USER',
+        'DB_PASSWORD',
+        'DB_NAME',
+        'DATABASE_URL',
+        'MYSQL_HOST',
+        'MYSQL_PORT',
+        'MYSQL_USER',
+        'MYSQL_PASSWORD',
+        'MYSQL_DATABASE',
+    ];
     private const DEFAULT_PORT_LISTEN_ATTEMPTS = 30;
     private const NEXTJS_BUN_PORT_LISTEN_ATTEMPTS = 90;
     private const PORT_LISTEN_INTERVAL_SECONDS = 2;
@@ -280,8 +293,9 @@ final class DeployService
         }
 
         if ($runtime === 'nextjs_bun') {
-            $this->logProjectPortConfiguration($project, 'nohup');
-            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s start_mode=nohup path=%s port=%d',
+            $startMode = 'nohup';
+            $this->logProjectPortConfiguration($project, $startMode);
+            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s start_mode=%s path=%s port=%d',
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
                 $runtime,
@@ -291,8 +305,15 @@ final class DeployService
             );
 
             $this->stdout[] = '[STEP] release only this project port before build/start';
+            $beforeReleasePids = $this->portPids($port);
             if (!$this->releaseProjectPort($port)) {
                 return $this->fail('프로젝트 포트 해제 실패: ' . $port);
+            }
+            $afterReleaseDetails = $this->portReadinessDetails($port);
+            if ((bool) $afterReleaseDetails['ready']) {
+                return $this->fail('프로젝트 포트가 해제되지 않아 빌드를 중단합니다: port=' . $port
+                    . ' pid=' . ($afterReleaseDetails['pid'] ?? 'unknown')
+                    . ' detail=' . (string) $afterReleaseDetails['detail']);
             }
 
             $this->stdout[] = '[STEP] clean .next';
@@ -300,11 +321,11 @@ final class DeployService
                 return $this->fail('rm -rf .next 실패');
             }
             $this->stdout[] = '[STEP] bun run build';
-            if (!$this->runCommand(['bun', 'run', 'build'], $path)) {
+            if (!$this->runShellCommand($this->projectEnvCommand('bun run build', $path), $path)) {
                 return $this->fail('bun run build 실패');
             }
 
-            $startCommand = $this->nextjsBunStartCommand($port);
+            $startCommand = $this->nextjsBunStartCommand($port, $path);
             $this->stdout[] = '[NOHUP_START] at=' . $this->now()
                 . ' cwd=' . $path
                 . ' expected_port=' . $port
@@ -318,7 +339,8 @@ final class DeployService
             if (!$this->waitForProjectPortListening(
                 $port,
                 self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS,
-                self::PORT_LISTEN_INTERVAL_SECONDS
+                self::PORT_LISTEN_INTERVAL_SECONDS,
+                $beforeReleasePids
             )) {
                 return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (runtime=nextjs_bun start_mode=nohup)');
             }
@@ -327,7 +349,7 @@ final class DeployService
                 self::DEFAULT_PORT_LISTEN_ATTEMPTS,
                 self::PORT_LISTEN_INTERVAL_SECONDS
             )) {
-                $this->stderr[] = 'HTTP 응답 확인 실패는 포트 기동 실패와 분리해서 기록합니다: port=' . $port . ' (runtime=nextjs_bun start_mode=nohup)';
+                return $this->fail('HTTP 응답 확인 실패: port=' . $port . ' (runtime=nextjs_bun start_mode=nohup)');
             }
             if ($this->appLogHasAddressInUse($path)) {
                 return $this->fail('app.log에서 EADDRINUSE가 확인되었습니다: ' . rtrim($path, '/') . '/app.log');
@@ -431,10 +453,22 @@ final class DeployService
         }
 
         $this->stdout[] = '[PORT_RELEASE_START] port=' . $port . ' max_wait=' . $maxWaitSeconds . 's interval=1s';
+        $details = $this->portReadinessDetails($port);
         $pids = $this->portPids($port);
+        if ($pids === [] && $this->isNumericPid($details['pid'] ?? null)) {
+            $pids = [(string) $details['pid']];
+        }
         if ($pids === []) {
-            $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' already_free=yes';
-            return true;
+            if (!(bool) $details['ready']) {
+                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' already_free=yes detail=' . (string) $details['detail'];
+                return true;
+            }
+
+            $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
+                . ' reason=listen_without_pid'
+                . ' source=' . (string) $details['source']
+                . ' detail=' . (string) $details['detail'];
+            return false;
         }
 
         $this->terminatePids($pids, 'TERM');
@@ -442,26 +476,35 @@ final class DeployService
 
         for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
             sleep(1);
+            $details = $this->portReadinessDetails($port);
             $pids = $this->portPids($port);
-            if ($pids === []) {
-                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt;
+            if ($pids === [] && $this->isNumericPid($details['pid'] ?? null)) {
+                $pids = [(string) $details['pid']];
+            }
+            if ($pids === [] && !(bool) $details['ready']) {
+                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt . ' detail=' . (string) $details['detail'];
                 return true;
             }
 
             $this->stdout[] = '[PORT_RELEASE_WAIT] port=' . $port
                 . ' attempt=' . $attempt . '/' . $maxWaitSeconds
-                . ' pids=' . implode(',', $pids);
+                . ' pids=' . ($pids === [] ? 'unknown' : implode(',', $pids))
+                . ' listen=' . ((bool) $details['ready'] ? 'yes' : 'no')
+                . ' detail=' . (string) $details['detail'];
 
-            if ($attempt === $sigkillAttempt) {
+            if ($attempt === $sigkillAttempt && $pids !== []) {
                 $this->terminatePids($pids, 'KILL');
             }
         }
 
+        $details = $this->portReadinessDetails($port);
         $pids = $this->portPids($port);
         $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
-            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
+            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids))
+            . ' listen=' . ((bool) $details['ready'] ? 'yes' : 'no')
+            . ' detail=' . (string) $details['detail'];
 
-        return $pids === [];
+        return false;
     }
 
     /**
@@ -469,13 +512,41 @@ final class DeployService
      */
     private function portPids(int $port): array
     {
-        $output = [];
-        $code = 0;
-        exec('lsof -ti tcp:' . $port . ' 2>/dev/null || true', $output, $code);
+        $pids = [];
 
-        return array_values(array_filter(array_map('trim', $output), static function (string $pid): bool {
-            return preg_match('/^\d+$/', $pid) === 1;
+        $lsofOutput = [];
+        exec('lsof -nP -iTCP:' . $port . ' -sTCP:LISTEN -t 2>/dev/null', $lsofOutput);
+        $pids = array_merge($pids, $this->numericPids($lsofOutput));
+
+        $ssOutput = [];
+        exec('ss -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $ssOutput);
+        foreach ($ssOutput as $line) {
+            $pids = array_merge($pids, $this->pidsFromSocketLine($line));
+        }
+
+        $netstatOutput = [];
+        exec('netstat -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $netstatOutput);
+        foreach ($netstatOutput as $line) {
+            $pids = array_merge($pids, $this->pidsFromSocketLine($line));
+        }
+
+        return array_values(array_unique($this->numericPids($pids)));
+    }
+
+    /**
+     * @param array<int,string> $values
+     * @return array<int,string>
+     */
+    private function numericPids(array $values): array
+    {
+        return array_values(array_filter(array_map('trim', $values), function (string $pid): bool {
+            return $this->isNumericPid($pid);
         }));
+    }
+
+    private function isNumericPid(mixed $pid): bool
+    {
+        return is_string($pid) && preg_match('/^\d+$/', $pid) === 1;
     }
 
     /**
@@ -495,10 +566,71 @@ final class DeployService
         exec('kill -s ' . $signal . ' ' . implode(' ', array_map('escapeshellarg', $pids)) . ' 2>/dev/null || true');
     }
 
-    private function nextjsBunStartCommand(int $port): string
+    private function nextjsBunStartCommand(int $port, string $path): string
     {
-        return 'nohup env PORT=' . escapeshellarg((string) $port)
-            . ' bun run start -H 0.0.0.0 > app.log 2>&1 &';
+        return 'nohup ' . $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
+            . ' bun run start -H 0.0.0.0', $path) . ' > app.log 2>&1 &';
+    }
+
+    private function projectEnvCommand(string $command, string $path): string
+    {
+        $unsetParts = array_map(static function (string $key): string {
+            return '-u ' . escapeshellarg($key);
+        }, self::PROJECT_ENV_UNSET_KEYS);
+
+        $envParts = [];
+        foreach ($this->projectDatabaseEnv($path) as $key => $value) {
+            $envParts[] = $key . '=' . escapeshellarg($value);
+        }
+
+        return trim('env ' . implode(' ', $unsetParts) . ' ' . implode(' ', $envParts) . ' ' . $command);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function projectDatabaseEnv(string $path): array
+    {
+        $envFile = rtrim($path, '/') . '/.env';
+        if (!is_file($envFile) || !is_readable($envFile)) {
+            return [];
+        }
+
+        $values = [];
+        foreach (file($envFile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            if (str_starts_with($line, 'export ')) {
+                $line = trim(substr($line, 7));
+            }
+            if (!str_contains($line, '=')) {
+                continue;
+            }
+
+            [$key, $value] = array_map('trim', explode('=', $line, 2));
+            if (!in_array($key, self::PROJECT_ENV_UNSET_KEYS, true)) {
+                continue;
+            }
+
+            $values[$key] = $this->normalizeDotenvValue($value);
+        }
+
+        return $values;
+    }
+
+    private function normalizeDotenvValue(string $value): string
+    {
+        if (strlen($value) >= 2) {
+            $quote = $value[0];
+            if (($quote === '"' || $quote === "'") && substr($value, -1) === $quote) {
+                $value = substr($value, 1, -1);
+                return $quote === '"' ? stripcslashes($value) : str_replace("\'", "'", $value);
+            }
+        }
+
+        return $value;
     }
 
     private function appLogHasAddressInUse(string $path): bool
@@ -531,9 +663,14 @@ final class DeployService
 
             $result = $this->httpStatusCode($url);
             $statusCode = (int) $result['status_code'];
+            if ($statusCode >= 500) {
+                $this->stderr[] = '[HTTP_CHECK_RESPONSE_WITH_APP_ERROR] url=' . $url
+                    . ' status=' . $statusCode
+                    . ' attempt=' . $attempt . '/' . $maxAttempts;
+                return false;
+            }
             if ($statusCode > 0) {
-                $label = $statusCode >= 500 ? '[HTTP_CHECK_RESPONSE_WITH_APP_ERROR]' : '[HTTP_CHECK_SUCCESS]';
-                $this->stdout[] = $label . ' url=' . $url
+                $this->stdout[] = '[HTTP_CHECK_SUCCESS] url=' . $url
                     . ' status=' . $statusCode
                     . ' attempt=' . $attempt . '/' . $maxAttempts;
                 return true;
@@ -576,7 +713,10 @@ final class DeployService
         ];
     }
 
-    private function waitForProjectPortListening(int $port, int $maxAttempts, int $intervalSeconds): bool
+    /**
+     * @param array<int,string> $previousPids
+     */
+    private function waitForProjectPortListening(int $port, int $maxAttempts, int $intervalSeconds, array $previousPids = []): bool
     {
         $maxWaitSeconds = $maxAttempts * $intervalSeconds;
         $this->stdout[] = '[PORT_CHECK_START] port=' . $port
@@ -590,11 +730,22 @@ final class DeployService
                 return false;
             }
 
-        for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
-            sleep(1);
-            $pids = $this->portPids($port);
-            if ($pids === []) {
-                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt;
+            $details = $this->portReadinessDetails($port);
+            if ((bool) $details['ready']) {
+                $pid = $details['pid'] ?? null;
+                if ($this->isPreviousPortPid($pid, $previousPids)) {
+                    $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port
+                        . ' reason=previous_pid_still_listening'
+                        . ' pid=' . (string) $pid
+                        . ' attempt=' . $attempt . '/' . $maxAttempts
+                        . ' detail=' . (string) $details['detail'];
+                    return false;
+                }
+                $this->stdout[] = '[PORT_CHECK_SUCCESS] port=' . $port
+                    . ' pid=' . ($pid ?? 'unknown')
+                    . ' source=' . (string) $details['source']
+                    . ' attempt=' . $attempt . '/' . $maxAttempts
+                    . ' detail=' . (string) $details['detail'];
                 return true;
             }
 
@@ -605,14 +756,30 @@ final class DeployService
                     . ' probes=' . (string) $details['detail'];
             }
 
-            if ($attempt === $sigkillAttempt) {
-                $this->terminatePids($pids, 'KILL');
+            $remaining = $this->remainingProjectSeconds();
+            if ($attempt < $maxAttempts && $remaining > 0) {
+                sleep(min($intervalSeconds, $remaining));
             }
         }
 
-        $pids = $this->portPids($port);
-        $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
-            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids));
+        $finalDetails = $this->portReadinessDetails($port);
+        if ((bool) $finalDetails['ready']) {
+            $pid = $finalDetails['pid'] ?? null;
+            if ($this->isPreviousPortPid($pid, $previousPids)) {
+                $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port
+                    . ' reason=previous_pid_still_listening'
+                    . ' pid=' . (string) $pid
+                    . ' attempt=final'
+                    . ' detail=' . (string) $finalDetails['detail'];
+                return false;
+            }
+            $this->stdout[] = '[PORT_CHECK_SUCCESS] port=' . $port
+                . ' pid=' . ($pid ?? 'unknown')
+                . ' source=' . (string) $finalDetails['source']
+                . ' attempt=final'
+                . ' detail=' . (string) $finalDetails['detail'];
+            return true;
+        }
 
         $this->stderr[] = '[PORT_CHECK_FAIL] port=' . $port
             . ' attempts=' . $maxAttempts
@@ -621,23 +788,24 @@ final class DeployService
             . ' listen=' . $this->listeningPortsSummary($port, null)
             . ' probes=' . (string) $finalDetails['detail'];
 
-    /**
-     * @return array<int,string>
-     */
-    private function portPids(int $port): array
-    {
-        $output = [];
-        $code = 0;
-        exec('lsof -ti tcp:' . $port . ' 2>/dev/null || true', $output, $code);
-
-        return array_values(array_filter(array_map('trim', $output), static function (string $pid): bool {
-            return preg_match('/^\d+$/', $pid) === 1;
-        }));
+        return false;
     }
 
     private function isPortListening(int $port): bool
     {
         return (bool) $this->portReadinessDetails($port)['ready'];
+    }
+
+    /**
+     * @param array<int,string> $previousPids
+     */
+    private function isPreviousPortPid(mixed $pid, array $previousPids): bool
+    {
+        if (!$this->isNumericPid($pid)) {
+            return false;
+        }
+
+        return in_array((string) $pid, $previousPids, true);
     }
 
     /**
@@ -710,14 +878,23 @@ final class DeployService
 
     private function pidFromSocketLine(string $line): ?string
     {
-        if (preg_match('/pid=(\d+)/', $line, $matches) === 1) {
-            return $matches[1];
+        return $this->pidsFromSocketLine($line)[0] ?? null;
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function pidsFromSocketLine(string $line): array
+    {
+        $pids = [];
+        if (preg_match_all('/pid=(\d+)/', $line, $matches) > 0) {
+            $pids = array_merge($pids, $matches[1]);
         }
         if (preg_match('#\s(\d+)/[^\s]+#', $line, $matches) === 1) {
-            return $matches[1];
+            $pids[] = $matches[1];
         }
 
-        return null;
+        return array_values(array_unique($this->numericPids($pids)));
     }
 
     private function logProjectPortConfiguration(array $project, string $startMode): void
