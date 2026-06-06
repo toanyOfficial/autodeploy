@@ -186,7 +186,9 @@ async function runRebootRestore(form) {
     showDeployFeedback(feedback, 'failed', `서버 재부팅 자동화 요청 중 오류가 발생했습니다.<pre class="operation-log">${escapeHtml(error?.message || String(error))}</pre>`);
     await loadRebootDeployLog();
   } finally {
-    setOperationLock(false);
+    if (document.body.dataset.deployProgress !== 'running') {
+      setOperationLock(false);
+    }
   }
 }
 
@@ -271,12 +273,14 @@ function showDeployProgress(projectName, projects = []) {
   renderDeployProgressStatuses(projects);
   overlay.hidden = false;
   document.body.dataset.deployProgress = 'running';
+  setOperationLock(true);
 }
 
 function hideDeployProgress() {
   const overlay = document.querySelector('[data-deploy-progress-overlay]');
   if (overlay) overlay.hidden = true;
   delete document.body.dataset.deployProgress;
+  setOperationLock(false);
 }
 
 function deployProgressOverlay() {
@@ -289,7 +293,7 @@ function deployProgressOverlay() {
   overlay.hidden = true;
   overlay.setAttribute('aria-live', 'polite');
   overlay.innerHTML = `
-    <div class="deploy-progress-card" role="status">
+    <div class="deploy-progress-card" role="dialog" aria-modal="true" aria-label="배포 진행 상황">
       <span class="deploy-progress-spinner" aria-hidden="true"></span>
       <div class="deploy-progress-content">
         <p class="eyebrow">배포 진행중</p>
@@ -371,6 +375,27 @@ function setOperationLock(locked) {
       control.disabled = control.dataset.wasDisabled === 'true';
       delete control.dataset.wasDisabled;
     }
+  });
+
+  document.querySelectorAll('main a, main summary').forEach((element) => {
+    if (locked) {
+      if (!Object.prototype.hasOwnProperty.call(element.dataset, 'wasTabIndex')) {
+        element.dataset.wasTabIndex = element.getAttribute('tabindex') ?? '';
+      }
+      element.setAttribute('tabindex', '-1');
+      element.setAttribute('aria-disabled', 'true');
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(element.dataset, 'wasTabIndex')) {
+      if (element.dataset.wasTabIndex === '') {
+        element.removeAttribute('tabindex');
+      } else {
+        element.setAttribute('tabindex', element.dataset.wasTabIndex);
+      }
+      delete element.dataset.wasTabIndex;
+    }
+    element.removeAttribute('aria-disabled');
   });
 }
 
@@ -555,6 +580,7 @@ async function refreshDashboardContent() {
 bindProjectInteractions();
 if (document.querySelector('[data-deploy-progress-overlay]')) {
   document.body.dataset.deployProgress = 'running';
+  setOperationLock(true);
   window.setInterval(refreshDeployProgressStatus, 5000);
   refreshDeployProgressStatus();
 }
