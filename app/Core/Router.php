@@ -44,6 +44,18 @@ final class Router
             return;
         }
 
+        if ($path === '/docs/reboot-automation.md' && $method === 'GET') {
+            $doc = __DIR__ . '/../../docs/reboot-automation.md';
+            if (is_readable($doc)) {
+                header('Content-Type: text/plain; charset=utf-8');
+                readfile($doc);
+                return;
+            }
+            Response::json(['message' => 'Document not found.'], 404);
+            return;
+        }
+
+
         $projectController = new ProjectController();
         if ($path === '/projects' && $method === 'POST') {
             $projectController->store($request);
@@ -127,6 +139,18 @@ final class Router
         }
         if (preg_match('#^/api/reports/(\d+)$#', $path, $matches) && $method === 'GET') {
             $api->report((int) $matches[1]);
+            return;
+        }
+        if ($path === '/api/system/reboot-and-restore/status' && $method === 'GET') {
+            $api->rebootAutomationStatus();
+            return;
+        }
+        if ($path === '/api/system/reboot-and-restore' && $method === 'POST') {
+            $api->rebootAndRestore($request);
+            return;
+        }
+        if ($path === '/api/system/reboot-and-restore/log' && $method === 'GET') {
+            $api->rebootDeployLog();
             return;
         }
         if ($path === '/api/deploy/status' && $method === 'GET') {
