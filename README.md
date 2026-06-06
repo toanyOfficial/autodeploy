@@ -75,4 +75,4 @@ sudo systemctl daemon-reload
 
 `dandorak-post-reboot.sh`는 프로젝트별 배포 명령을 직접 실행하지 않고, appuser 권한으로 `php scripts/deploy_all_stable.php`를 호출합니다. 해당 CLI는 `StableDeploymentBatchService`를 통해 활성 프로젝트 목록을 조회하고 각 프로젝트에 대해 `DeployService::deployStable()`을 순차 호출합니다.
 
-최근 자동화 로그는 고정 파일 `/var/log/auto_deploy/reboot-deploy.log`만 조회합니다.
+최근 자동화 로그는 고정 파일 `/var/log/auto_deploy/reboot-deploy.log`의 최근 200줄만 조회하며, 스크립트 실행 시 파일은 최근 400줄로 압축되어 무한정 누적되지 않습니다.

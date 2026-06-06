@@ -34,6 +34,18 @@ final class DeployHistoryRepository extends BaseRepository
         );
     }
 
+    public function latestByProject(int $projectId): ?array
+    {
+        return $this->fetchOne(
+            'SELECT h.*, v.version_name, COALESCE(h.deployed_commit_hash, v.git_commit_hash) AS current_commit_hash'
+            . ' FROM ' . DeployHistory::TABLE . ' h'
+            . ' LEFT JOIN deploy_version v ON v.id = h.deploy_version_id'
+            . ' WHERE h.project_id = :project_id'
+            . ' ORDER BY COALESCE(h.ended_at, h.started_at, h.created_at) DESC, h.id DESC LIMIT 1',
+            ['project_id' => $projectId]
+        );
+    }
+
     public function hasRunning(): bool
     {
         $row = $this->fetchOne(
