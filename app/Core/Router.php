@@ -61,6 +61,18 @@ final class Router
             return;
         }
 
+        if ($path === '/docs/reboot-automation.md' && $method === 'GET') {
+            $doc = __DIR__ . '/../../docs/reboot-automation.md';
+            if (is_readable($doc)) {
+                header('Content-Type: text/plain; charset=utf-8');
+                readfile($doc);
+                return;
+            }
+            Response::json(['message' => 'Document not found.'], 404);
+            return;
+        }
+
+
         $projectController = new ProjectController();
         if ($path === '/projects' && $method === 'POST') {
             $projectController->store($request);
