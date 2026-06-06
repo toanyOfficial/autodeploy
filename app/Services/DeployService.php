@@ -8,10 +8,13 @@ use App\Repositories\DeployVersionRepository;
 
 final class DeployService
 {
-    private const PROJECT_TIMEOUT_SECONDS = 300;
+    private const PROJECT_TIMEOUT_SECONDS = 600;
     private const COMMAND_TIMEOUT_SECONDS = 300;
     private const STALE_RUNNING_SECONDS = 600;
     private const AUTO_DEPLOY_PORT = 9090;
+    private const DEFAULT_PORT_LISTEN_ATTEMPTS = 30;
+    private const NEXTJS_BUN_PORT_LISTEN_ATTEMPTS = 90;
+    private const PORT_LISTEN_INTERVAL_SECONDS = 2;
 
     private DeployProjectRepository $projects;
     private DeployVersionRepository $versions;
@@ -211,7 +214,14 @@ final class DeployService
                 $this->cleanupProjectRuntime($project, $path, $port);
                 return $this->fail('pm2 서비스 시작 실패: ' . $processName);
             }
-            if (!$this->waitForProjectPortListening($port)) {
+            if (!$this->waitForProjectPortListening(
+                $port,
+                self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS,
+                self::PORT_LISTEN_INTERVAL_SECONDS,
+                $processName,
+                $path
+            )) {
+                $this->appendPm2Diagnostics($processName, $path, '포트 LISTEN 실패 직전');
                 $this->cleanupProjectRuntime($project, $path, $port);
                 return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (pm2=' . $processName . ')');
             }
@@ -236,7 +246,11 @@ final class DeployService
                 $this->stopProjectPort($port);
                 return $this->fail('python_static 서비스 시작 실패');
             }
-            if (!$this->waitForProjectPortListening($port)) {
+            if (!$this->waitForProjectPortListening(
+                $port,
+                self::DEFAULT_PORT_LISTEN_ATTEMPTS,
+                self::PORT_LISTEN_INTERVAL_SECONDS
+            )) {
                 $this->stopProjectPort($port);
                 return $this->fail('포트 LISTEN 확인 실패: ' . $port);
             }
@@ -294,30 +308,116 @@ final class DeployService
     {
         $processName = $this->pm2ProcessName($project);
         $this->stderr[] = '프로젝트 실패 cleanup 시작: pm2=' . $processName . ' port=' . $port;
+        $this->appendPm2Diagnostics($processName, $cwd, 'cleanup 전 PM2 상태');
         $this->deletePm2Process($processName, $cwd);
         $this->stopProjectPort($port);
         $this->stderr[] = '프로젝트 실패 cleanup 종료: pm2=' . $processName . ' port=' . $port;
     }
 
-    private function waitForProjectPortListening(int $port): bool
-    {
-        $this->stdout[] = '포트 LISTEN 확인 대기: ' . $port . ' (max_attempts=30, interval=2s)';
-        for ($attempt = 1; $attempt <= 30; $attempt++) {
+    private function waitForProjectPortListening(
+        int $port,
+        int $maxAttempts,
+        int $intervalSeconds,
+        ?string $processName = null,
+        ?string $cwd = null
+    ): bool {
+        $maxWaitSeconds = $maxAttempts * $intervalSeconds;
+        $this->stdout[] = '포트 LISTEN 확인 대기: ' . $port
+            . ' (max_attempts=' . $maxAttempts
+            . ', interval=' . $intervalSeconds . 's'
+            . ', max_wait=' . $maxWaitSeconds . 's'
+            . ($processName !== null ? ', pm2=' . $processName : '')
+            . ')';
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             if (!$this->ensureProjectTimeRemaining('포트 LISTEN 확인')) {
+                if ($processName !== null && $cwd !== null) {
+                    $this->appendPm2Diagnostics($processName, $cwd, '프로젝트 타임아웃으로 포트 확인 중단');
+                }
                 return false;
             }
+
             if ($this->isPortListening($port)) {
                 $this->stdout[] = '포트가 LISTEN 상태입니다: ' . $port . ' (attempt=' . $attempt . ')';
                 return true;
             }
+
+            if ($processName !== null && $cwd !== null && ($attempt === 1 || $attempt % 10 === 0 || $attempt === $maxAttempts)) {
+                $status = $this->pm2ProcessStatus($processName, $cwd);
+                $this->stdout[] = '포트 미개방 상태 확인: port=' . $port
+                    . ' attempt=' . $attempt . '/' . $maxAttempts
+                    . ' pm2=' . $processName
+                    . ' status=' . ($status ?? 'unknown');
+                if ($status === 'online') {
+                    $this->stdout[] = 'PM2 프로세스는 online 이지만 포트가 아직 LISTEN 상태가 아닙니다. 즉시 실패 처리하지 않고 계속 대기합니다.';
+                } elseif ($status === null) {
+                    $this->stderr[] = 'PM2 프로세스 상태를 확인할 수 없습니다: ' . $processName . ' (attempt=' . $attempt . ')';
+                } else {
+                    $this->stderr[] = 'PM2 프로세스가 online 상태가 아닙니다: ' . $processName . ' status=' . $status . ' (attempt=' . $attempt . ')';
+                }
+            }
+
             $remaining = $this->remainingProjectSeconds();
-            if ($attempt < 30 && $remaining > 0) {
-                sleep(min(2, $remaining));
+            if ($attempt < $maxAttempts && $remaining > 0) {
+                sleep(min($intervalSeconds, $remaining));
             }
         }
 
-        $this->stderr[] = '포트 LISTEN 대기 시간이 초과되었습니다: ' . $port . ' (attempts=30, interval=2s)';
+        $this->stderr[] = '포트 LISTEN 대기 시간이 초과되었습니다: ' . $port
+            . ' (attempts=' . $maxAttempts . ', interval=' . $intervalSeconds . 's, max_wait=' . $maxWaitSeconds . 's)';
+        if ($processName !== null && $cwd !== null) {
+            $this->appendPm2Diagnostics($processName, $cwd, '포트 LISTEN timeout 후 PM2 상태');
+        }
+
         return false;
+    }
+
+    private function pm2ProcessStatus(string $processName, string $cwd): ?string
+    {
+        $processes = $this->pm2ProcessList($cwd);
+        if ($processes === null) {
+            return null;
+        }
+
+        foreach ($processes as $process) {
+            if (!is_array($process) || (string) ($process['name'] ?? '') !== $processName) {
+                continue;
+            }
+
+            $environment = $process['pm2_env'] ?? [];
+            return is_array($environment) ? (string) ($environment['status'] ?? 'unknown') : 'unknown';
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>|null
+     */
+    private function pm2ProcessList(string $cwd): ?array
+    {
+        $output = [];
+        $code = 0;
+        exec('cd ' . escapeshellarg($cwd) . ' && bash -lc ' . escapeshellarg('timeout --kill-after=2s 10s pm2 jlist 2>/dev/null'), $output, $code);
+        if ($code !== 0) {
+            return null;
+        }
+
+        $decoded = json_decode(implode(PHP_EOL, $output), true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function appendPm2Diagnostics(string $processName, string $cwd, string $context): void
+    {
+        $output = [];
+        $code = 0;
+        $command = 'timeout --kill-after=2s 10s pm2 describe ' . escapeshellarg($processName) . ' 2>&1 | head -120';
+        exec('cd ' . escapeshellarg($cwd) . ' && bash -lc ' . escapeshellarg($command), $output, $code);
+
+        $this->stderr[] = '[PM2 DIAG] ' . $context . ' process=' . $processName . ' cwd=' . $cwd . ' exit_code=' . $code;
+        if ($output !== []) {
+            $this->stderr[] = implode(PHP_EOL, $output);
+        }
     }
 
     private function isPortListening(int $port): bool

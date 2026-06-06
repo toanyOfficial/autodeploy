@@ -33,7 +33,7 @@ php scripts/test_db_connection.php
 - `POST /projects/{projectId}/deploy/versions/{versionId}`: 특정 등록 버전의 Commit Hash 기준으로 배포합니다.
 - `GET /api/deploy/status`: 전역 배포 진행 여부를 확인합니다.
 
-배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료하고, 프로젝트 경로에서 프로젝트 키 기반 PM2 프로세스만 종료/시작한 뒤 실제 포트 LISTEN 상태를 확인합니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. 프로젝트별 배포는 최대 5분으로 제한되며 명령 타임아웃 또는 포트 미오픈 시 실패로 기록됩니다.
+배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)에 따라 코드 내부에서 결정됩니다. `nextjs_bun`은 빌드 성공 후에만 기존 포트 프로세스를 종료하고, 프로젝트 경로에서 프로젝트 키 기반 PM2 프로세스만 종료/시작한 뒤 실제 포트 LISTEN 상태를 확인합니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. `nextjs_bun`은 PM2 start 이후 포트 LISTEN 확인을 최대 180초(90회 × 2초)까지 대기하고, PM2가 online인데 포트만 늦게 열리는 경우 즉시 실패 처리하지 않고 PM2 진단 로그를 남기며 계속 대기합니다.
 
 ## 배포 이력 및 리포트
 
