@@ -372,6 +372,59 @@ async function refreshDeployProgressStatus() {
   }
 }
 
+function renderDeployProgressStatuses(projects) {
+  const list = document.querySelector('[data-deploy-progress-status-list]');
+  if (!list) return;
+
+  const items = Array.isArray(projects) ? projects : [];
+  if (items.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+
+  const labels = { success: '배포성공', running: '배포중', pending: '배포대기' };
+  const order = ['success', 'running', 'pending'];
+  list.innerHTML = order.map((state) => {
+    const stateItems = items.filter((item) => item?.state === state);
+    if (stateItems.length === 0) return '';
+
+    return `
+      <div class="deploy-progress-status-group" data-state="${state}">
+        <span>${labels[state]}</span>
+        <ul>${stateItems.map((item) => `<li>${escapeHtml(item.project_name || item.project_key || '프로젝트')}</li>`).join('')}</ul>
+      </div>
+    `;
+  }).join('');
+}
+
+async function refreshDeployProgressStatus() {
+  const overlay = document.querySelector('[data-deploy-progress-overlay]');
+  if (!overlay || overlay.hidden) return;
+
+  try {
+    const response = await fetch('/api/deploy/status', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const status = await response.json();
+    const projects = Array.isArray(status?.projects) ? status.projects : [];
+    const running = projects.find((item) => item?.state === 'running');
+
+    if (running?.project_name) {
+      overlay.querySelector('[data-deploy-progress-project]').textContent = running.project_name;
+    }
+    renderDeployProgressStatuses(projects);
+
+    if (!status.deploying && overlay.dataset.serverDeploying === 'true') {
+      hideDeployProgress();
+      await refreshDashboardContent();
+    }
+  } catch (error) {
+    // 상태 폴링 실패는 다음 주기에서 복구될 수 있으므로 화면 상태를 유지합니다.
+  }
+}
+
 function setOperationLock(locked) {
   document.body.dataset.operationLocked = locked ? 'true' : 'false';
   document.querySelectorAll('button, input, textarea, select').forEach((control) => {
