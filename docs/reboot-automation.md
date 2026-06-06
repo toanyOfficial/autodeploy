@@ -25,6 +25,7 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+MAX_LOG_LINES=400
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 
 mkdir -p "${LOG_DIR}"
@@ -32,6 +33,19 @@ touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
 chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+
+compact_log() {
+  if [ -f "${LOG_FILE}" ]; then
+    local temp_file
+    temp_file="$(mktemp)"
+    tail -n "${MAX_LOG_LINES}" "${LOG_FILE}" > "${temp_file}" 2>/dev/null || true
+    cat "${temp_file}" > "${LOG_FILE}" 2>/dev/null || true
+    rm -f "${temp_file}"
+  fi
+}
+
+compact_log
+trap compact_log EXIT
 
 exec >> "${LOG_FILE}" 2>&1
 
@@ -53,6 +67,7 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
@@ -62,6 +77,19 @@ touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
 chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+
+compact_log() {
+  if [ -f "${LOG_FILE}" ]; then
+    local temp_file
+    temp_file="$(mktemp)"
+    tail -n "${MAX_LOG_LINES}" "${LOG_FILE}" > "${temp_file}" 2>/dev/null || true
+    cat "${temp_file}" > "${LOG_FILE}" 2>/dev/null || true
+    rm -f "${temp_file}"
+  fi
+}
+
+compact_log
+trap compact_log EXIT
 
 exec >> "${LOG_FILE}" 2>&1
 
@@ -77,6 +105,7 @@ cleanup() {
   else
     log "post-reboot 작업이 실패했습니다. 원인 확인을 위해 ${POST_REBOOT_SERVICE} enable 상태를 유지합니다. exit_code=${exit_code}"
   fi
+  compact_log
 }
 trap cleanup EXIT
 
@@ -178,6 +207,7 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+MAX_LOG_LINES=400
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 
 mkdir -p "${LOG_DIR}"
@@ -185,6 +215,19 @@ touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
 chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+
+compact_log() {
+  if [ -f "${LOG_FILE}" ]; then
+    local temp_file
+    temp_file="$(mktemp)"
+    tail -n "${MAX_LOG_LINES}" "${LOG_FILE}" > "${temp_file}" 2>/dev/null || true
+    cat "${temp_file}" > "${LOG_FILE}" 2>/dev/null || true
+    rm -f "${temp_file}"
+  fi
+}
+
+compact_log
+trap compact_log EXIT
 
 exec >> "${LOG_FILE}" 2>&1
 
@@ -207,6 +250,7 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
@@ -216,6 +260,19 @@ touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
 chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+
+compact_log() {
+  if [ -f "${LOG_FILE}" ]; then
+    local temp_file
+    temp_file="$(mktemp)"
+    tail -n "${MAX_LOG_LINES}" "${LOG_FILE}" > "${temp_file}" 2>/dev/null || true
+    cat "${temp_file}" > "${LOG_FILE}" 2>/dev/null || true
+    rm -f "${temp_file}"
+  fi
+}
+
+compact_log
+trap compact_log EXIT
 
 exec >> "${LOG_FILE}" 2>&1
 
@@ -231,6 +288,7 @@ cleanup() {
   else
     log "post-reboot 작업이 실패했습니다. 원인 확인을 위해 ${POST_REBOOT_SERVICE} enable 상태를 유지합니다. exit_code=${exit_code}"
   fi
+  compact_log
 }
 trap cleanup EXIT
 

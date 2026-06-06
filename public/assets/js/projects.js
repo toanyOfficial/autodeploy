@@ -175,6 +175,7 @@ async function runRebootRestore(form) {
     const result = await response.json();
 
     if (response.ok && result.success) {
+      showDeployProgress('전체 활성 프로젝트', []);
       showDeployFeedback(feedback, 'success', escapeHtml(result.message || '서버 재부팅 및 자동 안정화버전 배포가 예약되었습니다.'));
       return;
     }
@@ -214,43 +215,17 @@ async function loadRebootDeployLog(button = null) {
 
 function formatRebootRestoreFailure(result) {
   const message = escapeHtml(result?.message || '서버 재부팅 자동화 요청에 실패했습니다.');
-  const diagnostic = result?.diagnostic_log || formatDiagnosticObject(result?.diagnostic);
-  const logWriteError = result?.log_write_error ? `
+  const details = [
+    result?.exit_code !== undefined ? `exit code: ${result.exit_code}` : '',
+    result?.command ? `command: ${result.command}` : '',
+    result?.stdout ? `stdout:\n${result.stdout}` : '',
+    result?.stderr ? `stderr:\n${result.stderr}` : '',
+    result?.detail ? `detail:\n${result.detail}` : '',
+  ].filter(Boolean).join('\n\n');
 
-log write error:
-${result.log_write_error}` : '';
+  if (!details) return message;
 
-  if (!diagnostic && !logWriteError) return message;
-
-  return `${message}<pre class="operation-log">${escapeHtml(`${diagnostic || ''}${logWriteError}`)}</pre>`;
-}
-
-function formatDiagnosticObject(diagnostic) {
-  if (!diagnostic) return '';
-
-  return [
-    '실패 발생 위치:',
-    diagnostic.location || '',
-    '',
-    '실행 명령:',
-    diagnostic.command || '',
-    '',
-    'exit code:',
-    diagnostic.exit_code ?? 'N/A',
-    '',
-    'stdout:',
-    diagnostic.stdout || '',
-    '',
-    'stderr:',
-    diagnostic.stderr || '',
-    '',
-    'Exception Message:',
-    diagnostic.exception_message || '',
-    'File:',
-    diagnostic.exception_file || '',
-    'Line:',
-    diagnostic.exception_line || '',
-  ].join('\n');
+  return `${message}<pre class="operation-log">${escapeHtml(details)}</pre>`;
 }
 
 async function copyReportToClipboard(button) {
@@ -290,9 +265,10 @@ function getDeployProjectName(form) {
     || '선택한 프로젝트';
 }
 
-function showDeployProgress(projectName) {
+function showDeployProgress(projectName, projects = []) {
   const overlay = deployProgressOverlay();
   overlay.querySelector('[data-deploy-progress-project]').textContent = projectName;
+  renderDeployProgressStatuses(projects);
   overlay.hidden = false;
   document.body.dataset.deployProgress = 'running';
 }
@@ -315,15 +291,69 @@ function deployProgressOverlay() {
   overlay.innerHTML = `
     <div class="deploy-progress-card" role="status">
       <span class="deploy-progress-spinner" aria-hidden="true"></span>
-      <div>
-        <p class="eyebrow">빌드 진행중</p>
-        <strong><span data-deploy-progress-project></span> 빌드 요청이 접수되었습니다.</strong>
+      <div class="deploy-progress-content">
+        <p class="eyebrow">배포 진행중</p>
+        <strong><span data-deploy-progress-project></span> 프로젝트가 빌드중입니다.</strong>
         <small>작업이 끝날 때까지 다른 오퍼레이션은 잠시 비활성화됩니다.</small>
+        <div class="deploy-progress-status-list" data-deploy-progress-status-list></div>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
   return overlay;
+}
+
+function renderDeployProgressStatuses(projects) {
+  const list = document.querySelector('[data-deploy-progress-status-list]');
+  if (!list) return;
+
+  const items = Array.isArray(projects) ? projects : [];
+  if (items.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+
+  const labels = { success: '배포성공', running: '배포중', pending: '배포대기' };
+  const order = ['success', 'running', 'pending'];
+  list.innerHTML = order.map((state) => {
+    const stateItems = items.filter((item) => item?.state === state);
+    if (stateItems.length === 0) return '';
+
+    return `
+      <div class="deploy-progress-status-group" data-state="${state}">
+        <span>${labels[state]}</span>
+        <ul>${stateItems.map((item) => `<li>${escapeHtml(item.project_name || item.project_key || '프로젝트')}</li>`).join('')}</ul>
+      </div>
+    `;
+  }).join('');
+}
+
+async function refreshDeployProgressStatus() {
+  const overlay = document.querySelector('[data-deploy-progress-overlay]');
+  if (!overlay || overlay.hidden) return;
+
+  try {
+    const response = await fetch('/api/deploy/status', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const status = await response.json();
+    const projects = Array.isArray(status?.projects) ? status.projects : [];
+    const running = projects.find((item) => item?.state === 'running');
+
+    if (running?.project_name) {
+      overlay.querySelector('[data-deploy-progress-project]').textContent = running.project_name;
+    }
+    renderDeployProgressStatuses(projects);
+
+    if (!status.deploying && overlay.dataset.serverDeploying === 'true') {
+      hideDeployProgress();
+      await refreshDashboardContent();
+    }
+  } catch (error) {
+    // 상태 폴링 실패는 다음 주기에서 복구될 수 있으므로 화면 상태를 유지합니다.
+  }
 }
 
 function setOperationLock(locked) {
@@ -424,13 +454,9 @@ async function runDeploy(form) {
   const feedback = document.querySelector('[data-deploy-feedback]');
   const cardStatus = card?.querySelector('[data-card-deploy-status]');
   const projectName = getDeployProjectName(form);
-  const runningMessage = `${escapeHtml(projectName)} 빌드 요청이 접수되었습니다. 배포가 진행 중입니다. 잠시만 기다려주세요.`;
-
   setOperationLock(true);
   setDeployButtonsDisabled(true);
-  showDeployProgress(projectName);
-  showDeployFeedback(feedback, 'running', runningMessage);
-  showDeployFeedback(cardStatus, 'running', `상태: ${escapeHtml(projectName)} 배포 진행중`);
+  showDeployProgress(projectName, [{ project_name: projectName, state: 'running' }]);
 
   try {
     const response = await fetch(toApiDeployUrl(form.action), {
@@ -520,13 +546,18 @@ async function refreshDashboardContent() {
       bindProjectInteractions(nextGlobalTools);
     }
   } catch (error) {
-    console.warn('dashboard refresh failed after deploy', error);
+    // 새로고침 실패 시 현재 화면을 유지하고 다음 사용자 동작에 맡깁니다.
   } finally {
     window.clearTimeout(timeoutId);
   }
 }
 
 bindProjectInteractions();
+if (document.querySelector('[data-deploy-progress-overlay]')) {
+  document.body.dataset.deployProgress = 'running';
+  window.setInterval(refreshDeployProgressStatus, 5000);
+  refreshDeployProgressStatus();
+}
 
 (() => {
   const month = new Date().getMonth() + 1;
@@ -556,32 +587,19 @@ bindProjectInteractions();
     particle.className = 'seasonal-particle';
     particle.textContent = symbols[season][index % symbols[season].length];
 
-    if (index === 0) {
-      particle.classList.add('seasonal-particle-debug');
-      particle.style.setProperty('--x', '50vw');
-      particle.style.setProperty('--delay', '0s');
-      particle.style.setProperty('--duration', '28s');
-      particle.style.setProperty('--size', '24px');
-      particle.style.setProperty('--drift', '54px');
-      particle.style.setProperty('--curve-a', '-28px');
-      particle.style.setProperty('--curve-b', '42px');
-      particle.style.setProperty('--curve-c', '14px');
-      particle.style.setProperty('--spin', '210deg');
-    } else {
-      const evenlySpacedDelay = (index / count) * fallWindow;
-      const smallJitter = Math.random() * 0.45;
-      const drift = -88 + Math.random() * 176;
+    const evenlySpacedDelay = (index / count) * fallWindow;
+    const smallJitter = Math.random() * 0.45;
+    const drift = -88 + Math.random() * 176;
 
-      particle.style.setProperty('--x', `${Math.random() * 100}vw`);
-      particle.style.setProperty('--delay', `${evenlySpacedDelay + smallJitter}s`);
-      particle.style.setProperty('--duration', `${24 + Math.random() * 12}s`);
-      particle.style.setProperty('--size', `${13 + Math.random() * 10}px`);
-      particle.style.setProperty('--drift', `${drift}px`);
-      particle.style.setProperty('--curve-a', `${-36 + Math.random() * 72}px`);
-      particle.style.setProperty('--curve-b', `${-52 + Math.random() * 104}px`);
-      particle.style.setProperty('--curve-c', `${drift * 0.35 + (-24 + Math.random() * 48)}px`);
-      particle.style.setProperty('--spin', `${80 + Math.random() * 220}deg`);
-    }
+    particle.style.setProperty('--x', `${Math.random() * 100}vw`);
+    particle.style.setProperty('--delay', `${evenlySpacedDelay + smallJitter}s`);
+    particle.style.setProperty('--duration', `${24 + Math.random() * 12}s`);
+    particle.style.setProperty('--size', `${13 + Math.random() * 10}px`);
+    particle.style.setProperty('--drift', `${drift}px`);
+    particle.style.setProperty('--curve-a', `${-36 + Math.random() * 72}px`);
+    particle.style.setProperty('--curve-b', `${-52 + Math.random() * 104}px`);
+    particle.style.setProperty('--curve-c', `${drift * 0.35 + (-24 + Math.random() * 48)}px`);
+    particle.style.setProperty('--spin', `${80 + Math.random() * 220}deg`);
 
     layer.appendChild(particle);
   }
