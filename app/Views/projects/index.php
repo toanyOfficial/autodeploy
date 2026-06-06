@@ -257,6 +257,29 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
         <details class="panel add-panel developer-tools global-developer-tools">
             <summary>프로젝트 등록 / 개발자 설정</summary>
             <p class="muted">프로젝트 등록은 드물게 사용하는 개발자용 기능이라 접어두었어요.</p>
+
+            <section class="system-restore-panel" aria-label="서버 재부팅 자동화">
+                <div>
+                    <p class="eyebrow">서버 기본설정 자동화</p>
+                    <h2>서버 재부팅 + 기본설정</h2>
+                    <p class="muted">일반 프로젝트 배포와 분리된 개발자 전용 작업입니다. 재부팅 후 DB, Auto Deploy, 전체 활성 프로젝트 안정화버전 배포를 순서대로 실행합니다.</p>
+                </div>
+                <div class="system-install-status" data-reboot-install-status aria-live="polite">
+                    <strong>설치 상태 확인 중...</strong>
+                    <p class="muted">필수 서버 파일과 sudo 권한을 확인한 뒤 실행 가능 여부를 표시합니다.</p>
+                </div>
+                <form method="post" action="/api/system/reboot-and-restore" data-reboot-restore-form>
+                    <button type="submit" class="danger-button" data-reboot-restore-button disabled>서버 재부팅 + 기본설정</button>
+                </form>
+                <div class="deploy-feedback" data-reboot-restore-feedback hidden></div>
+                <div class="system-log-actions">
+                    <button type="button" class="secondary-button" data-reboot-status-button>설치 상태 다시 확인</button>
+                    <a class="secondary-button link-button" href="/docs/reboot-automation.md" target="_blank" rel="noopener">설치 가이드 보기</a>
+                    <button type="button" class="secondary-button" data-reboot-log-button>최근 로그 조회</button>
+                </div>
+                <pre class="system-log" data-reboot-log hidden></pre>
+            </section>
+
             <form method="post" action="/projects" class="project-form">
                 <label><span>프로젝트명</span><input name="project_name" maxlength="100" required></label>
                 <label><span>project_key</span><input name="project_key" maxlength="50" required></label>
