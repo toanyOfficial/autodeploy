@@ -440,7 +440,16 @@ final class DeployService
                 return $this->fail('프로젝트 포트 종료 실패: ' . $port);
             }
             $this->stdout[] = '[STEP] python_static start';
-            if (!$this->runShellCommand('nohup python3 -m http.server ' . $port . ' --bind 0.0.0.0 > app.log 2>&1 &', $path)) {
+            $startCommand = 'nohup ' . $this->projectEnvCommand(
+                'python3 -m http.server ' . escapeshellarg((string) $port) . ' --bind 0.0.0.0',
+                $path
+            ) . ' > app.log 2>&1 &';
+            $this->stdout[] = '[NOHUP_START] at=' . $this->now()
+                . ' cwd=' . $path
+                . ' expected_port=' . $port
+                . ' app_log=' . rtrim($path, '/') . '/app.log'
+                . ' command=' . $startCommand;
+            if (!$this->runShellCommand($startCommand, $path)) {
                 $this->stopProjectPort($port);
                 return $this->fail('python_static 서비스 시작 실패');
             }

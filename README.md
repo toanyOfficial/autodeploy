@@ -55,6 +55,11 @@ python3 scripts/check_deployservice_methods.py
 - `POST /api/reports/{historyId}/operation`은 `sync_dependencies`, `check_git_auth`, `fix_permissions`, `kill_port`, `clean_next_build`, `copy_report` 중 whitelist된 리포트 복구/확인 operation만 실행합니다.
 - `GET /reports/{historyId}`는 리포트 상세 화면, 전체 복사 버튼, 대표 실패 케이스 안내/복구 액션 카드를 제공합니다.
 
+
+## 프로젝트 등록 메모
+
+- `dandora_official` 등록 SQL과 운영 반영 전 체크리스트는 `docs/dandora-official-registration.md`를 확인합니다.
+
 ## 서버 재부팅 + 기본설정 + 전체 안정화버전 자동배포
 
 관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼이 있습니다. 이 버튼은 `POST /api/system/reboot-and-restore`만 호출하며, 서버에서 고정 명령인 `sudo /usr/local/sbin/auto-reboot-deploy.sh`만 실행합니다.
