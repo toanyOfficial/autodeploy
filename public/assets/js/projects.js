@@ -46,6 +46,18 @@ function bindProjectInteractions(root = document) {
     });
   });
 
+  root.querySelectorAll('[data-self-reboot-form]:not([data-bound])').forEach((form) => {
+    form.dataset.bound = 'true';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const message = 'Auto Deploy 웹서비스 자체를 재시작합니다.\n\n요청 직후 잠시 접속이 끊길 수 있으며, 서버 전체 재부팅이나 전체 프로젝트 재배포는 수행하지 않습니다.\n\n계속 진행하시겠습니까?';
+      if (!window.confirm(message)) return;
+
+      await runSelfReboot(form);
+    });
+  });
+
   root.querySelectorAll('[data-reboot-status-button]:not([data-bound])').forEach((button) => {
     button.dataset.bound = 'true';
     button.addEventListener('click', async () => {
@@ -190,6 +202,48 @@ async function runRebootRestore(form) {
       setOperationLock(false);
     }
   }
+}
+
+async function runSelfReboot(form) {
+  const feedback = document.querySelector('[data-self-reboot-feedback]');
+
+  setOperationLock(true);
+  showDeployFeedback(feedback, 'running', 'Auto Deploy self reboot를 요청하고 있습니다. 잠시 후 접속이 끊길 수 있습니다.');
+
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const result = await response.json();
+
+    if (response.ok && result.success) {
+      showDeployFeedback(feedback, 'success', escapeHtml(result.message || 'Auto Deploy self reboot가 예약되었습니다.'));
+      window.setTimeout(() => window.location.reload(), 7000);
+      return;
+    }
+
+    showDeployFeedback(feedback, 'failed', formatSelfRebootFailure(result));
+  } catch (error) {
+    showDeployFeedback(feedback, 'failed', `Auto Deploy self reboot 요청 중 오류가 발생했습니다.<pre class="operation-log">${escapeHtml(error?.message || String(error))}</pre>`);
+  } finally {
+    window.setTimeout(() => setOperationLock(false), 7000);
+  }
+}
+
+function formatSelfRebootFailure(result) {
+  const message = escapeHtml(result?.message || 'Auto Deploy self reboot 요청에 실패했습니다.');
+  const details = [
+    result?.exit_code !== undefined ? `exit code: ${result.exit_code}` : '',
+    result?.stdout ? `stdout:\n${result.stdout}` : '',
+    result?.stderr ? `stderr:\n${result.stderr}` : '',
+    result?.detail ? `detail:\n${result.detail}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  if (!details) return message;
+
+  return `${message}<pre class="operation-log">${escapeHtml(details)}</pre>`;
 }
 
 async function loadRebootDeployLog(button = null) {

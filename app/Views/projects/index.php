@@ -331,7 +331,11 @@ $siteUrlForProject = static function (array $project): string {
                 <form method="post" action="/api/system/reboot-and-restore" data-reboot-restore-form>
                     <button type="submit" class="danger-button" data-reboot-restore-button disabled>서버 재부팅 + 기본설정</button>
                 </form>
+                <form method="post" action="/api/system/self-reboot" data-self-reboot-form>
+                    <button type="submit" class="secondary-button">self reboot</button>
+                </form>
                 <div class="deploy-feedback" data-reboot-restore-feedback hidden></div>
+                <div class="deploy-feedback" data-self-reboot-feedback hidden></div>
                 <div class="system-log-actions">
                     <button type="button" class="secondary-button" data-reboot-status-button>설치 상태 다시 확인</button>
                     <a class="secondary-button link-button" href="/docs/reboot-automation.md" target="_blank" rel="noopener">설치 가이드 보기</a>

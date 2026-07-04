@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Config\Database;
+use App\Config\Env;
 use App\Core\Request;
 use App\Core\Response;
 use App\Repositories\DeployHistoryRepository;
@@ -187,6 +188,74 @@ final class ApiController
     public function rebootAutomationStatus(): void
     {
         Response::json((new RebootAutomationStatusService())->status());
+    }
+
+    public function selfReboot(Request $request): void
+    {
+        if ($request->method() !== 'POST') {
+            Response::json(['message' => 'Method not allowed.'], 405);
+            return;
+        }
+
+        $root = dirname(__DIR__, 2);
+        $port = (int) (Env::get('PORT', '9090') ?? '9090');
+        if ($port < 1 || $port > 65535) {
+            Response::json([
+                'success' => false,
+                'message' => 'Auto Deploy 포트 설정이 올바르지 않아 self reboot를 시작할 수 없습니다.',
+            ], 500);
+            return;
+        }
+
+        $phpBinary = PHP_BINARY ?: 'php';
+        $restartScript = sprintf(
+            'sleep 2; pids=$(lsof -ti tcp:%1$d 2>/dev/null || true); if [ -n "$pids" ]; then kill $pids 2>/dev/null || true; sleep 1; fi; cd %2$s && nohup %3$s -S 0.0.0.0:%1$d -t public > app.log 2>&1 &',
+            $port,
+            escapeshellarg($root),
+            escapeshellarg($phpBinary)
+        );
+        $command = 'nohup bash -lc ' . escapeshellarg($restartScript) . ' > /dev/null 2>&1 &';
+
+        try {
+            $process = proc_open(['bash', '-lc', $command], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            if (!is_resource($process)) {
+                Response::json([
+                    'success' => false,
+                    'message' => 'Auto Deploy self reboot 명령을 시작할 수 없습니다.',
+                    'detail' => 'proc_open returned a non-resource process handle.',
+                ], 500);
+                return;
+            }
+
+            $stdout = trim(stream_get_contents($pipes[1]) ?: '');
+            $stderr = trim(stream_get_contents($pipes[2]) ?: '');
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $code = proc_close($process);
+
+            if ($code !== 0) {
+                Response::json([
+                    'success' => false,
+                    'message' => 'Auto Deploy self reboot 명령 실행에 실패했습니다.',
+                    'exit_code' => $code,
+                    'stdout' => $stdout,
+                    'stderr' => $stderr,
+                ], 409);
+                return;
+            }
+
+            Response::json([
+                'success' => true,
+                'message' => 'Auto Deploy self reboot를 예약했습니다. 잠시 후 페이지를 새로고침해 주세요.',
+                'port' => $port,
+            ]);
+        } catch (\Throwable $exception) {
+            Response::json([
+                'success' => false,
+                'message' => 'Auto Deploy self reboot 처리 중 PHP 예외가 발생했습니다.',
+                'detail' => $exception->getMessage(),
+            ], 500);
+        }
     }
 
     public function rebootAndRestore(Request $request): void
