@@ -131,11 +131,23 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
+log "Auto Deploy 코드를 origin/main으로 갱신합니다."
+sudo -u appuser -H bash -lc "
+cd '${AUTO_DEPLOY_DIR}'
+git fetch --all
+git reset --hard origin/main
+if [ -d .next ]; then rm -rf .next; fi
+"
+
+log "Auto Deploy 9090 포트를 해제합니다."
+fuser -k 9090/tcp 2>/dev/null || true
+sleep 1
+
 log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc '
-cd /srv/auto_deploy
+sudo -u appuser -H bash -lc "
+cd '${AUTO_DEPLOY_DIR}'
 nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-'
+"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
@@ -314,11 +326,23 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
+log "Auto Deploy 코드를 origin/main으로 갱신합니다."
+sudo -u appuser -H bash -lc "
+cd '${AUTO_DEPLOY_DIR}'
+git fetch --all
+git reset --hard origin/main
+if [ -d .next ]; then rm -rf .next; fi
+"
+
+log "Auto Deploy 9090 포트를 해제합니다."
+fuser -k 9090/tcp 2>/dev/null || true
+sleep 1
+
 log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc '
-cd /srv/auto_deploy
+sudo -u appuser -H bash -lc "
+cd '${AUTO_DEPLOY_DIR}'
 nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-'
+"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do

@@ -208,17 +208,32 @@ final class ApiController
         }
 
         $phpBinary = PHP_BINARY ?: 'php';
-        $restartScript = sprintf(
-            'sleep 2; pids=$(lsof -ti tcp:%1$d 2>/dev/null || true); if [ -n "$pids" ]; then kill $pids 2>/dev/null || true; sleep 1; fi; cd %2$s && nohup %3$s -S 0.0.0.0:%1$d -t public > app.log 2>&1 &',
-            $port,
-            escapeshellarg($root),
-            escapeshellarg($phpBinary)
-        );
-        $command = 'nohup bash -lc ' . escapeshellarg($restartScript) . ' > /dev/null 2>&1 &';
+        $logFile = sys_get_temp_dir() . '/auto_deploy_self_reboot.log';
+        $scriptFile = tempnam(sys_get_temp_dir(), 'auto-deploy-self-reboot-');
+        if ($scriptFile === false) {
+            Response::json([
+                'success' => false,
+                'message' => 'Auto Deploy self reboot 임시 스크립트를 생성할 수 없습니다.',
+            ], 500);
+            return;
+        }
+
+        $restartScript = $this->selfRebootScript($root, $port, $phpBinary, $logFile, $scriptFile);
+        if (file_put_contents($scriptFile, $restartScript) === false || !chmod($scriptFile, 0700)) {
+            @unlink($scriptFile);
+            Response::json([
+                'success' => false,
+                'message' => 'Auto Deploy self reboot 임시 스크립트를 저장할 수 없습니다.',
+            ], 500);
+            return;
+        }
+
+        $command = 'nohup setsid bash ' . escapeshellarg($scriptFile) . ' >> ' . escapeshellarg($logFile) . ' 2>&1 < /dev/null &';
 
         try {
             $process = proc_open(['bash', '-lc', $command], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
             if (!is_resource($process)) {
+                @unlink($scriptFile);
                 Response::json([
                     'success' => false,
                     'message' => 'Auto Deploy self reboot 명령을 시작할 수 없습니다.',
@@ -234,6 +249,7 @@ final class ApiController
             $code = proc_close($process);
 
             if ($code !== 0) {
+                @unlink($scriptFile);
                 Response::json([
                     'success' => false,
                     'message' => 'Auto Deploy self reboot 명령 실행에 실패했습니다.',
@@ -246,16 +262,62 @@ final class ApiController
 
             Response::json([
                 'success' => true,
-                'message' => 'Auto Deploy self reboot를 예약했습니다. 잠시 후 페이지를 새로고침해 주세요.',
+                'message' => 'Auto Deploy self reboot를 예약했습니다. git reset 후 포트를 재시작하므로 잠시 뒤 페이지를 새로고침해 주세요.',
                 'port' => $port,
+                'log_file' => $logFile,
             ]);
         } catch (\Throwable $exception) {
+            @unlink($scriptFile);
             Response::json([
                 'success' => false,
                 'message' => 'Auto Deploy self reboot 처리 중 PHP 예외가 발생했습니다.',
                 'detail' => $exception->getMessage(),
             ], 500);
         }
+    }
+
+    private function selfRebootScript(string $root, int $port, string $phpBinary, string $logFile, string $scriptFile): string
+    {
+        return implode("\n", [
+            '#!/usr/bin/env bash',
+            'set -Eeuo pipefail',
+            'log_file=' . escapeshellarg($logFile),
+            'script_file=' . escapeshellarg($scriptFile),
+            'root_dir=' . escapeshellarg($root),
+            'port=' . escapeshellarg((string) $port),
+            'php_binary=' . escapeshellarg($phpBinary),
+            'log() { echo "[$(date -Is)] $*"; }',
+            'cleanup() { rm -f "$script_file"; }',
+            'trap cleanup EXIT',
+            'sleep 2',
+            'log "self reboot start root=${root_dir} port=${port}"',
+            'cd "$root_dir"',
+            'log "git fetch --all"',
+            'git fetch --all',
+            'log "git reset --hard origin/main"',
+            'git reset --hard origin/main',
+            'if [ -d .next ]; then log "rm -rf .next"; rm -rf .next; fi',
+            'log "release port ${port}"',
+            'pids=""',
+            'if command -v fuser >/dev/null 2>&1; then fuser -k "${port}/tcp" 2>/dev/null || true; fi',
+            'if command -v lsof >/dev/null 2>&1; then pids=$(lsof -ti tcp:"${port}" 2>/dev/null || true); fi',
+            'if [ -n "${pids}" ]; then kill ${pids} 2>/dev/null || true; fi',
+            'for attempt in $(seq 1 15); do',
+            '  if command -v lsof >/dev/null 2>&1 && lsof -ti tcp:"${port}" >/dev/null 2>&1; then sleep 1; else break; fi',
+            'done',
+            'if command -v lsof >/dev/null 2>&1; then pids=$(lsof -ti tcp:"${port}" 2>/dev/null || true); if [ -n "${pids}" ]; then kill -9 ${pids} 2>/dev/null || true; fi; fi',
+            'log "start php built-in server"',
+            'nohup "$php_binary" -S "0.0.0.0:${port}" -t public > app.log 2>&1 &',
+            'server_pid=$!',
+            'log "started pid=${server_pid}"',
+            'for attempt in $(seq 1 30); do',
+            '  if curl -fsS --max-time 2 "http://127.0.0.1:${port}/login" >/dev/null 2>&1; then log "ready attempt=${attempt}"; exit 0; fi',
+            '  sleep 1',
+            'done',
+            'log "ready check failed"',
+            'exit 1',
+            '',
+        ]);
     }
 
     public function rebootAndRestore(Request $request): void
