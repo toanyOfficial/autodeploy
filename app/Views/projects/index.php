@@ -42,6 +42,17 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
 
     return $formatSeoulDateTime($value) . ' · ' . $formatRunningDuration($value);
 };
+
+$siteUrlForProject = static function (array $project): string {
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? '127.0.0.1');
+    if (str_starts_with($host, '[') && preg_match('/^\[([^\]]+)\](?::\d+)?$/', $host, $matches) === 1) {
+        $host = '[' . $matches[1] . ']';
+    } else {
+        $host = preg_replace('/:\d+$/', '', $host) ?: '127.0.0.1';
+    }
+
+    return 'http://' . $host . ':' . (int) $project['port'] . '/';
+};
 ?>
 <!doctype html>
 <html lang="ko">
@@ -143,6 +154,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                                 <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form data-deploy-form>
                                     <button type="submit" <?= $disabled ?> title="최신버전 빌드" aria-label="최신버전 빌드">최신</button>
                                 </form>
+                                <a class="site-open-button" href="<?= htmlspecialchars($siteUrlForProject($project), ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener">사이트 열기</a>
                             </div>
                         </div>
                         <div class="project-summary-status">
@@ -319,7 +331,11 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                 <form method="post" action="/api/system/reboot-and-restore" data-reboot-restore-form>
                     <button type="submit" class="danger-button" data-reboot-restore-button disabled>서버 재부팅 + 기본설정</button>
                 </form>
+                <form method="post" action="/api/system/self-reboot" data-self-reboot-form>
+                    <button type="submit" class="secondary-button">self reboot</button>
+                </form>
                 <div class="deploy-feedback" data-reboot-restore-feedback hidden></div>
+                <div class="deploy-feedback" data-self-reboot-feedback hidden></div>
                 <div class="system-log-actions">
                     <button type="button" class="secondary-button" data-reboot-status-button>설치 상태 다시 확인</button>
                     <a class="secondary-button link-button" href="/docs/reboot-automation.md" target="_blank" rel="noopener">설치 가이드 보기</a>

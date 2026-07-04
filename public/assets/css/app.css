@@ -162,7 +162,7 @@ button {
 .project-grid {
   display: grid;
   gap: 22px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr));
 }
 
 .card-head,
@@ -911,9 +911,9 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
 
 .project-summary-top {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.95fr);
   align-items: center;
-  gap: 14px;
+  gap: 20px;
 }
 
 .project-summary-title h2 {
@@ -924,8 +924,8 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
 
 .summary-deploy-actions {
   display: grid;
-  grid-template-columns: 9fr 1fr;
-  gap: 8px;
+  grid-template-columns: minmax(150px, 1fr) minmax(76px, 0.42fr) minmax(112px, 0.62fr);
+  gap: 10px;
   align-items: stretch;
 }
 
@@ -933,12 +933,20 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
   min-width: 0;
 }
 
-.summary-deploy-actions button {
+.summary-deploy-actions button,
+.summary-deploy-actions .site-open-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   min-height: 58px;
   border: 2px solid rgba(255, 255, 255, 0.82);
   border-radius: 20px;
   box-shadow: 0 14px 28px rgba(255, 90, 168, 0.22);
+  font-weight: 900;
+  line-height: 1.15;
+  text-align: center;
+  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -949,10 +957,17 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
 }
 
 .summary-deploy-actions form:nth-child(2) button {
-  padding-inline: 6px;
+  padding-inline: 14px;
   color: #fff;
   background: linear-gradient(135deg, #ff3f99, #ff88c8 55%, #ffc2df);
-  font-size: 0.82rem;
+  font-size: 0.94rem;
+}
+
+.summary-deploy-actions .site-open-button {
+  padding-inline: 16px;
+  color: var(--pink-700);
+  background: linear-gradient(135deg, #fff, #ffe8f4);
+  font-size: 0.92rem;
 }
 
 .project-summary-status {

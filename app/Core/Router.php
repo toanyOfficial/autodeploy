@@ -162,6 +162,10 @@ final class Router
             $api->rebootAutomationStatus();
             return;
         }
+        if ($path === '/api/system/self-reboot' && $method === 'POST') {
+            $api->selfReboot($request);
+            return;
+        }
         if ($path === '/api/system/reboot-and-restore' && $method === 'POST') {
             $api->rebootAndRestore($request);
             return;
