@@ -13,6 +13,7 @@ final class DeployProject extends Model
         'id',
         'project_key',
         'project_name',
+        'domain',
         'server_path',
         'port',
         'runtime_type',

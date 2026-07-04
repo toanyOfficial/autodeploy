@@ -42,6 +42,19 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
 
     return $formatSeoulDateTime($value) . ' · ' . $formatRunningDuration($value);
 };
+
+$siteUrlForProject = static function (array $project): ?string {
+    $domain = trim((string) ($project['domain'] ?? ''));
+    if ($domain === '') {
+        return null;
+    }
+
+    if (!preg_match('#^https?://#i', $domain)) {
+        $domain = 'https://' . $domain;
+    }
+
+    return $domain;
+};
 ?>
 <!doctype html>
 <html lang="ko">
@@ -143,6 +156,12 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                                 <form method="post" action="/projects/<?= (int) $project['id'] ?>/deploy/latest" data-latest-deploy-form data-deploy-form>
                                     <button type="submit" <?= $disabled ?> title="최신버전 빌드" aria-label="최신버전 빌드">최신</button>
                                 </form>
+                                <?php $siteUrl = $siteUrlForProject($project); ?>
+                                <?php if ($siteUrl !== null): ?>
+                                    <a class="site-open-button" href="<?= htmlspecialchars($siteUrl, ENT_QUOTES, 'UTF-8') ?>" target="_blank" rel="noopener">사이트 열기</a>
+                                <?php else: ?>
+                                    <span class="site-open-button is-disabled" aria-disabled="true">사이트 열기</span>
+                                <?php endif; ?>
                             </div>
                         </div>
                         <div class="project-summary-status">
@@ -221,6 +240,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                         <summary>개발자 설정 열기</summary>
 
                         <dl class="project-meta">
+                            <div><dt>도메인</dt><dd><?= htmlspecialchars($project['domain'] ?? '미등록', ENT_QUOTES, 'UTF-8') ?></dd></div>
                             <div><dt>서버 경로</dt><dd><?= htmlspecialchars($project['server_path'], ENT_QUOTES, 'UTF-8') ?></dd></div>
                             <div><dt>포트</dt><dd><?= (int) $project['port'] ?></dd></div>
                             <div><dt>runtime_type</dt><dd><?= htmlspecialchars($project['runtime_type'], ENT_QUOTES, 'UTF-8') ?></dd></div>
@@ -290,6 +310,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                                 <input type="hidden" name="_method" value="put">
                                 <label><span>프로젝트명</span><input name="project_name" value="<?= htmlspecialchars($project['project_name'], ENT_QUOTES, 'UTF-8') ?>" required></label>
                                 <label><span>project_key</span><input name="project_key" value="<?= htmlspecialchars($project['project_key'], ENT_QUOTES, 'UTF-8') ?>" maxlength="50" required></label>
+                                <label><span>domain</span><input name="domain" value="<?= htmlspecialchars($project['domain'] ?? '', ENT_QUOTES, 'UTF-8') ?>" maxlength="255"></label>
                                 <label><span>서버 경로</span><input name="server_path" value="<?= htmlspecialchars($project['server_path'], ENT_QUOTES, 'UTF-8') ?>" required></label>
                                 <label><span>포트</span><input name="port" type="number" min="1" max="65535" value="<?= (int) $project['port'] ?>" required></label>
                                 <label><span>runtime_type</span><input name="runtime_type" value="<?= htmlspecialchars($project['runtime_type'], ENT_QUOTES, 'UTF-8') ?>" maxlength="50" required></label>
@@ -319,7 +340,11 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
                 <form method="post" action="/api/system/reboot-and-restore" data-reboot-restore-form>
                     <button type="submit" class="danger-button" data-reboot-restore-button disabled>서버 재부팅 + 기본설정</button>
                 </form>
+                <form method="post" action="/api/system/self-reboot" data-self-reboot-form>
+                    <button type="submit" class="secondary-button">self reboot</button>
+                </form>
                 <div class="deploy-feedback" data-reboot-restore-feedback hidden></div>
+                <div class="deploy-feedback" data-self-reboot-feedback hidden></div>
                 <div class="system-log-actions">
                     <button type="button" class="secondary-button" data-reboot-status-button>설치 상태 다시 확인</button>
                     <a class="secondary-button link-button" href="/docs/reboot-automation.md" target="_blank" rel="noopener">설치 가이드 보기</a>
@@ -331,6 +356,7 @@ $formatDeployTime = static function (?string $value) use ($formatSeoulDateTime, 
             <form method="post" action="/projects" class="project-form">
                 <label><span>프로젝트명</span><input name="project_name" maxlength="100" required></label>
                 <label><span>project_key</span><input name="project_key" maxlength="50" required></label>
+                <label><span>domain</span><input name="domain" maxlength="255" placeholder="https://example.com"></label>
                 <label><span>서버 경로</span><input name="server_path" maxlength="255" required></label>
                 <label><span>포트</span><input name="port" type="number" min="1" max="65535" required></label>
                 <label><span>runtime_type</span><input name="runtime_type" maxlength="50" placeholder="python_static 또는 nextjs_bun" required></label>
