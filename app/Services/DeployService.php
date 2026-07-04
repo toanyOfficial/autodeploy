@@ -370,6 +370,11 @@ final class DeployService
                 $port
             );
 
+            $this->stdout[] = '[STEP] stop project supervisor before releasing port';
+            if (!$this->stopProjectSupervisor($path)) {
+                return $this->fail('프로젝트 supervisor 종료 실패: ' . $path);
+            }
+
             $this->stdout[] = '[STEP] release only this project port before build/start';
             $beforeReleasePids = $this->portPids($port);
             if (!$this->releaseProjectPort($port)) {
@@ -643,8 +648,74 @@ final class DeployService
 
     private function nextjsBunStartCommand(int $port, string $path): string
     {
-        return 'nohup ' . $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
-            . ' bun run start -H 0.0.0.0', $path) . ' > app.log 2>&1 &';
+        $pidFile = $this->supervisorPidFile($path);
+        $startCommand = $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
+            . ' bun run start -H 0.0.0.0', $path);
+        $script = implode("\n", [
+            'set +e',
+            'pid_file=' . escapeshellarg($pidFile),
+            'echo $$ > "$pid_file"',
+            'echo "[SUPERVISOR_START] at=$(date -Is) pid=$$ expected_port=' . $port . '"',
+            'child=""',
+            'cleanup() {',
+            '  echo "[SUPERVISOR_STOP] at=$(date -Is) pid=$$ child=${child:-none}"',
+            '  if [ -n "${child:-}" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi',
+            '  rm -f "$pid_file"',
+            '  exit 0',
+            '}',
+            'trap cleanup TERM INT',
+            'while true; do',
+            '  echo "[CHILD_START] at=$(date -Is) command=' . $this->shellLogValue($startCommand) . '"',
+            '  ' . $startCommand . ' &',
+            '  child=$!',
+            '  echo "[CHILD_PID] at=$(date -Is) pid=$child expected_port=' . $port . '"',
+            '  wait "$child"',
+            '  code=$?',
+            '  echo "[CHILD_EXIT] at=$(date -Is) pid=$child exit_code=$code expected_port=' . $port . '"',
+            '  child=""',
+            '  sleep 5 &',
+            '  child=$!',
+            '  wait "$child"',
+            '  child=""',
+            'done',
+        ]);
+
+        return 'nohup bash -lc ' . escapeshellarg($script) . ' > app.log 2>&1 &';
+    }
+
+    private function supervisorPidFile(string $path): string
+    {
+        return rtrim($path, '/') . '/.autodeploy-supervisor.pid';
+    }
+
+    private function shellLogValue(string $value): string
+    {
+        return str_replace(['\\', '"', '$', '`'], ['\\\\', '\\"', '\\$', '\\`'], $value);
+    }
+
+    private function stopProjectSupervisor(string $path): bool
+    {
+        $pidFile = $this->supervisorPidFile($path);
+        if (!is_file($pidFile)) {
+            $this->stdout[] = '[SUPERVISOR_RELEASE] pid_file=' . $pidFile . ' exists=no';
+            return true;
+        }
+
+        $pid = trim((string) file_get_contents($pidFile));
+        if (!$this->isNumericPid($pid)) {
+            $this->stdout[] = '[SUPERVISOR_RELEASE] pid_file=' . $pidFile . ' pid=invalid';
+            @unlink($pidFile);
+            return true;
+        }
+
+        $this->stdout[] = '[SUPERVISOR_RELEASE] pid_file=' . $pidFile . ' pid=' . $pid;
+        $command = 'pid=' . escapeshellarg($pid)
+            . '; if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null || true; fi'
+            . '; for i in $(seq 1 10); do if ! kill -0 "$pid" 2>/dev/null; then break; fi; sleep 1; done'
+            . '; if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi'
+            . '; rm -f ' . escapeshellarg($pidFile);
+
+        return $this->runShellCommand($command, null);
     }
 
     private function projectEnvCommand(string $command, string $path): string

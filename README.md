@@ -33,7 +33,7 @@ php scripts/test_db_connection.php
 - `POST /projects/{projectId}/deploy/versions/{versionId}`: 특정 등록 버전의 Commit Hash 기준으로 배포합니다.
 - `GET /api/deploy/status`: 전역 배포 진행 여부를 확인합니다.
 
-배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)과 프로젝트 설정값(`server_path`, `port`, `branch_name`)에 따라 코드 내부 템플릿으로 결정됩니다. `nextjs_bun` 공통 템플릿은 `cd {server_path}`, `git fetch --all`, `git reset --hard origin/{branch_name}`(안정화/특정버전 배포는 등록된 commit hash), `{port}` 점유 프로세스 TERM/SIGKILL 및 최대 30초 release 확인, `rm -rf .next`, `bun run build`, `nohup env PORT={port} bun run start -H 0.0.0.0 > app.log 2>&1 &`, `{port}` LISTEN 확인 순서입니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. 배포 상태 조회는 12분 이상 남은 `running` 이력을 stale 실패로 전환하고 lock/running 상세 상태를 반환합니다.
+배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`)과 프로젝트 설정값(`server_path`, `port`, `branch_name`)에 따라 코드 내부 템플릿으로 결정됩니다. `nextjs_bun` 공통 템플릿은 `cd {server_path}`, `git fetch --all`, `git reset --hard origin/{branch_name}`(안정화/특정버전 배포는 등록된 commit hash), `{port}` 점유 프로세스 TERM/SIGKILL 및 최대 30초 release 확인, `rm -rf .next`, `bun run build`, `nohup bash -lc <supervisor loop> > app.log 2>&1 &`로 supervisor를 띄워 `PORT={port} bun run start -H 0.0.0.0` 자식 프로세스를 실행하고 종료 시 exit code/PID를 `app.log`에 남긴 뒤 재시작하며, `{port}` LISTEN 확인 순서입니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. 배포 상태 조회는 12분 이상 남은 `running` 이력을 stale 실패로 전환하고 lock/running 상세 상태를 반환합니다.
 
 ## 배포 전 검증
 
