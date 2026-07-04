@@ -370,9 +370,9 @@ final class DeployService
                 $port
             );
 
-            $this->stdout[] = '[STEP] stop project supervisor before releasing port';
+            $this->stdout[] = '[STEP] stop legacy project supervisor before releasing port';
             if (!$this->stopProjectSupervisor($path)) {
-                return $this->fail('프로젝트 supervisor 종료 실패: ' . $path);
+                return $this->fail('기존 프로젝트 supervisor 종료 실패: ' . $path);
             }
 
             $this->stdout[] = '[STEP] release only this project port before build/start';
@@ -648,39 +648,20 @@ final class DeployService
 
     private function nextjsBunStartCommand(int $port, string $path): string
     {
-        $pidFile = $this->supervisorPidFile($path);
-        $startCommand = $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
-            . ' bun run start -H 0.0.0.0', $path);
-        $script = implode("\n", [
-            'set +e',
-            'pid_file=' . escapeshellarg($pidFile),
-            'echo $$ > "$pid_file"',
-            'echo "[SUPERVISOR_START] at=$(date -Is) pid=$$ expected_port=' . $port . '"',
-            'child=""',
-            'cleanup() {',
-            '  echo "[SUPERVISOR_STOP] at=$(date -Is) pid=$$ child=${child:-none}"',
-            '  if [ -n "${child:-}" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi',
-            '  rm -f "$pid_file"',
-            '  exit 0',
-            '}',
-            'trap cleanup TERM INT',
-            'while true; do',
-            '  echo "[CHILD_START] at=$(date -Is) command=' . $this->shellLogValue($startCommand) . '"',
-            '  ' . $startCommand . ' &',
-            '  child=$!',
-            '  echo "[CHILD_PID] at=$(date -Is) pid=$child expected_port=' . $port . '"',
-            '  wait "$child"',
-            '  code=$?',
-            '  echo "[CHILD_EXIT] at=$(date -Is) pid=$child exit_code=$code expected_port=' . $port . '"',
-            '  child=""',
-            '  sleep 5 &',
-            '  child=$!',
-            '  wait "$child"',
-            '  child=""',
-            'done',
-        ]);
+        return $this->closeInheritedFileDescriptorsCommand()
+            . '; nohup '
+            . $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
+                . ' bun run start -H 0.0.0.0', $path)
+            . ' > app.log 2>&1 < /dev/null &';
+    }
 
-        return 'nohup bash -lc ' . escapeshellarg($script) . ' > app.log 2>&1 &';
+    private function closeInheritedFileDescriptorsCommand(): string
+    {
+        return 'for fd_path in /proc/$$/fd/*; do '
+            . 'fd=${fd_path##*/}; '
+            . 'case "$fd" in 0|1|2|*[!0-9]*) continue ;; esac; '
+            . 'eval "exec ${fd}>&-" 2>/dev/null || true; '
+            . 'done';
     }
 
     private function supervisorPidFile(string $path): string

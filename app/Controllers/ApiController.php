@@ -218,7 +218,17 @@ final class ApiController
             return;
         }
 
-        $restartScript = $this->selfRebootScript($root, $port, $phpBinary, $logFile, $scriptFile);
+        $pidFile = $root . '/.autodeploy.pid';
+        if (file_put_contents($pidFile, (string) getmypid()) === false) {
+            @unlink($scriptFile);
+            Response::json([
+                'success' => false,
+                'message' => 'Auto Deploy PID 파일을 저장할 수 없어 self reboot를 시작할 수 없습니다.',
+            ], 500);
+            return;
+        }
+
+        $restartScript = $this->selfRebootScript($root, $port, $phpBinary, $logFile, $scriptFile, $pidFile);
         if (file_put_contents($scriptFile, $restartScript) === false || !chmod($scriptFile, 0700)) {
             @unlink($scriptFile);
             Response::json([
@@ -276,7 +286,7 @@ final class ApiController
         }
     }
 
-    private function selfRebootScript(string $root, int $port, string $phpBinary, string $logFile, string $scriptFile): string
+    private function selfRebootScript(string $root, int $port, string $phpBinary, string $logFile, string $scriptFile, string $pidFile): string
     {
         return implode("\n", [
             '#!/usr/bin/env bash',
@@ -286,40 +296,24 @@ final class ApiController
             'root_dir=' . escapeshellarg($root),
             'port=' . escapeshellarg((string) $port),
             'php_binary=' . escapeshellarg($phpBinary),
+            'pid_file=' . escapeshellarg($pidFile),
             'log() { echo "[$(date -Is)] $*"; }',
             'cleanup() { rm -f "$script_file"; }',
-            '# Do not use fuser -k here: it can terminate reverse proxies or client processes that only touch this port.',
-            '# Kill only the TCP LISTEN owner so unrelated sites keep running during self reboot.',
-            'listener_pids() {',
-            '  if command -v lsof >/dev/null 2>&1; then',
-            '    lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | grep -E "^[0-9]+$" | sort -u',
-            '  fi',
-            '}',
+            '# Self reboot must only stop the Auto Deploy process recorded in its pidfile.',
+            '# Do not discover or kill by port: child projects may temporarily inherit descriptors from older versions.',
             'release_auto_deploy_listener() {',
-            '  local pids pid',
-            '  pids="$(listener_pids || true)"',
-            '  if [ -z "${pids}" ]; then log "no listener on port ${port}"; return 0; fi',
-            '  log "terminate Auto Deploy listener pid(s): ${pids}"',
-            '  while IFS= read -r pid; do',
-            '    [ -n "${pid}" ] || continue',
-            '    kill "${pid}" 2>/dev/null || true',
-            '  done <<EOF_PIDS',
-            '${pids}',
-            'EOF_PIDS',
+            '  local pid',
+            '  if [ ! -f "${pid_file}" ]; then log "pidfile missing: ${pid_file}"; return 1; fi',
+            '  pid="$(cat "${pid_file}" 2>/dev/null | tr -cd "0-9")"',
+            '  if [ -z "${pid}" ]; then log "pidfile has no valid pid: ${pid_file}"; return 1; fi',
+            '  log "terminate Auto Deploy pidfile pid: ${pid}"',
+            '  kill "${pid}" 2>/dev/null || true',
             '  for attempt in $(seq 1 15); do',
-            '    pids="$(listener_pids || true)"',
-            '    [ -n "${pids}" ] || return 0',
+            '    if ! kill -0 "${pid}" 2>/dev/null; then return 0; fi',
             '    sleep 1',
             '  done',
-            '  pids="$(listener_pids || true)"',
-            '  [ -n "${pids}" ] || return 0',
-            '  log "force terminate Auto Deploy listener pid(s): ${pids}"',
-            '  while IFS= read -r pid; do',
-            '    [ -n "${pid}" ] || continue',
-            '    kill -9 "${pid}" 2>/dev/null || true',
-            '  done <<EOF_PIDS',
-            '${pids}',
-            'EOF_PIDS',
+            '  log "force terminate Auto Deploy pidfile pid: ${pid}"',
+            '  kill -9 "${pid}" 2>/dev/null || true',
             '}',
             'trap cleanup EXIT',
             'sleep 2',
@@ -330,11 +324,12 @@ final class ApiController
             'log "git reset --hard origin/main"',
             'git reset --hard origin/main',
             'if [ -d .next ]; then log "rm -rf .next"; rm -rf .next; fi',
-            'log "release Auto Deploy listener on port ${port}"',
+            'log "release Auto Deploy listener by pidfile ${pid_file}"',
             'release_auto_deploy_listener',
             'log "start php built-in server"',
             'nohup "$php_binary" -S "0.0.0.0:${port}" -t public > app.log 2>&1 < /dev/null &',
             'server_pid=$!',
+            'echo "${server_pid}" > "${pid_file}"',
             'log "started pid=${server_pid}"',
             'for attempt in $(seq 1 30); do',
             '  if curl -fsS --max-time 2 "http://127.0.0.1:${port}/login" >/dev/null 2>&1; then log "ready attempt=${attempt}"; exit 0; fi',
