@@ -22,12 +22,13 @@ final class DeployProjectRepository extends BaseRepository
 
     public function create(array $data): array
     {
-        $sql = 'INSERT INTO ' . DeployProject::TABLE . ' (project_key, project_name, server_path, port, runtime_type, branch_name, is_active)'
-            . ' VALUES (:project_key, :project_name, :server_path, :port, :runtime_type, :branch_name, :is_active)';
+        $sql = 'INSERT INTO ' . DeployProject::TABLE . ' (project_key, project_name, domain, server_path, port, runtime_type, branch_name, is_active)'
+            . ' VALUES (:project_key, :project_name, :domain, :server_path, :port, :runtime_type, :branch_name, :is_active)';
 
         $this->execute($sql, [
             'project_key' => $data['project_key'],
             'project_name' => $data['project_name'],
+            'domain' => $data['domain'] ?? null,
             'server_path' => $data['server_path'],
             'port' => (int) $data['port'],
             'runtime_type' => $data['runtime_type'],
@@ -47,13 +48,14 @@ final class DeployProjectRepository extends BaseRepository
 
         $this->execute(
             'UPDATE ' . DeployProject::TABLE
-            . ' SET project_key = :project_key, project_name = :project_name, server_path = :server_path,'
+            . ' SET project_key = :project_key, project_name = :project_name, domain = :domain, server_path = :server_path,'
             . ' port = :port, runtime_type = :runtime_type, branch_name = :branch_name, is_active = :is_active'
             . ' WHERE id = :id',
             [
                 'id' => $id,
                 'project_key' => $data['project_key'] ?? $current['project_key'],
                 'project_name' => $data['project_name'] ?? $current['project_name'],
+                'domain' => $data['domain'] ?? $current['domain'] ?? null,
                 'server_path' => $data['server_path'] ?? $current['server_path'],
                 'port' => isset($data['port']) ? (int) $data['port'] : (int) $current['port'],
                 'runtime_type' => $data['runtime_type'] ?? $current['runtime_type'],

@@ -12,7 +12,7 @@
 ### `deploy_project`
 
 - `id`는 AUTO_INCREMENT 기본키로 취급하므로 INSERT에서 수동 지정하지 않습니다.
-- 등록 컬럼: `project_key`, `project_name`, `server_path`, `port`, `runtime_type`, `branch_name`, `is_active`
+- 등록 컬럼: `project_key`, `project_name`, `domain`, `server_path`, `port`, `runtime_type`, `branch_name`, `is_active`
 - `created_at`, `updated_at`은 DB 기본값/트리거가 기존 구조대로 처리하도록 INSERT에서 제외합니다.
 
 ### `deploy_version`
@@ -42,6 +42,7 @@ START TRANSACTION;
 INSERT INTO deploy_project (
   project_key,
   project_name,
+  domain,
   server_path,
   port,
   runtime_type,
@@ -51,6 +52,7 @@ INSERT INTO deploy_project (
 VALUES (
   'dandora_official',
   '단도락 공식 홈페이지',
+  'https://단체도시락.com',
   '/srv/dandora_official',
   3700,
   'python_static',
@@ -95,7 +97,7 @@ COMMIT;
 코드상 보호 포트는 Auto Deploy 자체 포트 `9090`입니다. `3700`은 보호 포트와 충돌하지 않습니다. 운영 DB의 기존 프로젝트 포트와의 충돌 여부는 운영 DB에서 아래 쿼리로 최종 확인하세요.
 
 ```sql
-SELECT id, project_key, project_name, port
+SELECT id, project_key, project_name, domain, port
 FROM deploy_project
 WHERE is_active = 1 AND port = 3700;
 ```

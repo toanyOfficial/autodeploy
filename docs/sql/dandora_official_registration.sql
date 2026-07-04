@@ -9,6 +9,7 @@ START TRANSACTION;
 INSERT INTO deploy_project (
   project_key,
   project_name,
+  domain,
   server_path,
   port,
   runtime_type,
@@ -18,6 +19,7 @@ INSERT INTO deploy_project (
 VALUES (
   'dandora_official',
   '단도락 공식 홈페이지',
+  'https://단체도시락.com',
   '/srv/dandora_official',
   3700,
   'python_static',

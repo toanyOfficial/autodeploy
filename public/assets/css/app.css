@@ -911,9 +911,9 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
 
 .project-summary-top {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.95fr);
-  align-items: center;
-  gap: 20px;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 14px;
 }
 
 .project-summary-title h2 {
@@ -968,6 +968,14 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
   color: var(--pink-700);
   background: linear-gradient(135deg, #fff, #ffe8f4);
   font-size: 0.92rem;
+}
+
+.summary-deploy-actions .site-open-button.is-disabled {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.68;
 }
 
 .project-summary-status {
