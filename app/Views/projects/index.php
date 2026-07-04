@@ -62,6 +62,7 @@ $siteUrlForProject = static function (array $project): ?string {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Auto Deploy Dashboard</title>
+    <link rel="icon" href="/assets/favicon.ico" sizes="any">
     <link rel="stylesheet" href="/assets/css/app.css">
 </head>
 <body class="princess-page">

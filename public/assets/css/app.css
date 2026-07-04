@@ -1048,6 +1048,13 @@ body > :not(.seasonal-particles):not(.deploy-progress-overlay) {
     grid-template-columns: minmax(0, 9fr) minmax(44px, 1fr);
   }
 
+  .summary-deploy-actions .site-open-button {
+    grid-column: 1 / -1;
+    min-height: 44px;
+    padding-block: 8px;
+    font-size: 0.84rem;
+  }
+
 }
 
 /* Deployment request/response feedback */
