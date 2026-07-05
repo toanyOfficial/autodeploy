@@ -238,7 +238,8 @@ final class ApiController
             return;
         }
 
-        $command = 'nohup setsid bash ' . escapeshellarg($scriptFile) . ' >> ' . escapeshellarg($logFile) . ' 2>&1 < /dev/null &';
+        $command = $this->closeInheritedFileDescriptorsCommand()
+            . '; nohup setsid bash ' . escapeshellarg($scriptFile) . ' >> ' . escapeshellarg($logFile) . ' 2>&1 < /dev/null &';
 
         try {
             $process = proc_open(['bash', '-lc', $command], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
@@ -286,6 +287,15 @@ final class ApiController
         }
     }
 
+    private function closeInheritedFileDescriptorsCommand(): string
+    {
+        return 'for fd_path in /proc/$$/fd/*; do '
+            . 'fd=${fd_path##*/}; '
+            . 'case "$fd" in 0|1|2|*[!0-9]*) continue ;; esac; '
+            . 'eval "exec ${fd}>&-" 2>/dev/null || true; '
+            . 'done';
+    }
+
     private function selfRebootScript(string $root, int $port, string $phpBinary, string $logFile, string $scriptFile, string $pidFile): string
     {
         return implode("\n", [
@@ -297,6 +307,15 @@ final class ApiController
             'port=' . escapeshellarg((string) $port),
             'php_binary=' . escapeshellarg($phpBinary),
             'pid_file=' . escapeshellarg($pidFile),
+            'close_inherited_file_descriptors() {',
+            '  local fd_path fd',
+            '  for fd_path in /proc/$$/fd/*; do',
+            '    fd=${fd_path##*/}',
+            '    case "$fd" in 0|1|2|*[!0-9]*) continue ;; esac',
+            '    eval "exec ${fd}>&-" 2>/dev/null || true',
+            '  done',
+            '}',
+            'close_inherited_file_descriptors',
             'log() { echo "[$(date -Is)] $*"; }',
             'cleanup() { rm -f "$script_file"; }',
             '# Self reboot must only stop the Auto Deploy process recorded in its pidfile.',

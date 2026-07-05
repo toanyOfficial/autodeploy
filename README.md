@@ -62,7 +62,7 @@ python3 scripts/check_deployservice_methods.py
 
 ## 서버 재부팅 + 기본설정 + 전체 안정화버전 자동배포
 
-관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼이 있습니다. 이 버튼은 `POST /api/system/reboot-and-restore`만 호출하며, 서버에서 고정 명령인 `sudo /usr/local/sbin/auto-reboot-deploy.sh`만 실행합니다. `self reboot` 버튼은 임시 detached 스크립트를 생성해 `/srv/auto_deploy`를 `origin/main`으로 갱신하고, 필요 시 `.next`를 삭제한 뒤 포트 기준 kill 없이 `.autodeploy.pid`에 기록된 Auto Deploy PHP PID만 종료하고 PHP 내장 서버를 다시 기동합니다.
+관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼이 있습니다. 이 버튼은 `POST /api/system/reboot-and-restore`만 호출하며, 서버에서 고정 명령인 `sudo /usr/local/sbin/auto-reboot-deploy.sh`만 실행합니다. `self reboot` 버튼은 fd 3 이상을 닫은 상태로 임시 detached 스크립트를 생성해 `/srv/auto_deploy`를 `origin/main`으로 갱신하고, 필요 시 `.next`를 삭제한 뒤 포트 기준 kill 없이 `.autodeploy.pid`에 기록된 Auto Deploy PHP PID만 종료하고 PHP 내장 서버를 다시 기동합니다.
 
 운영 서버 반영 시에는 저장소의 템플릿 파일을 아래 위치로 배치합니다. 전체 복붙 설치 가이드는 `docs/reboot-automation.md`를 확인합니다.
 
