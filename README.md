@@ -22,6 +22,7 @@ php scripts/test_db_connection.php
 - `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE` 실행 금지
 - 기존 DB 구조에 대한 ORM 매핑과 Repository/API만 사용
 - 로그인 정보는 DB에 저장하지 않고 `.env`의 `ADMIN_ID`, `ADMIN_PASSWORD`, `SESSION_SECRET`를 사용
+- `ADMIN_PASSWORD`는 평문도 legacy로 지원하지만, 권장 형식은 `SESSION_SECRET` 기반 HMAC-SHA256 해시(`hmac-sha256:<digest>`)입니다. 생성 명령: `php scripts/hash_admin_password.php '관리자비밀번호'`
 
 ## 버전 관리 및 배포 API
 

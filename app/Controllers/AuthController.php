@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Config\Env;
 use App\Core\Request;
 use App\Core\Response;
+use App\Security\AdminPassword;
 
 final class AuthController
 {
@@ -24,9 +25,14 @@ final class AuthController
         $input = $request->input();
         $adminId = Env::required('ADMIN_ID');
         $adminPassword = Env::required('ADMIN_PASSWORD');
+        $sessionSecret = Env::get('SESSION_SECRET', '') ?? '';
 
         $idMatches = hash_equals($adminId, (string) ($input['admin_id'] ?? ''));
-        $passwordMatches = hash_equals($adminPassword, (string) ($input['admin_password'] ?? ''));
+        $passwordMatches = AdminPassword::verify(
+            $adminPassword,
+            (string) ($input['admin_password'] ?? ''),
+            $sessionSecret
+        );
 
         if ($idMatches && $passwordMatches) {
             session_regenerate_id(true);
