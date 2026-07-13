@@ -386,7 +386,7 @@ final class DeployService
                 . ' cwd=' . $path
                 . ' expected_port=' . $port
                 . ' app_log=' . rtrim($path, '/') . '/app.log'
-                . ' command=' . $startCommand;
+                . ' command=' . $this->sanitizeCommandForLog($startCommand);
             if (!$this->runShellCommand($startCommand, $path)) {
                 $this->stopProjectPort($port);
                 return $this->fail('python_static 서비스 시작 실패');
@@ -442,6 +442,8 @@ final class DeployService
         $buildPath = null;
         $candidateNext = null;
         $rollbackNext = null;
+        $candidateNodeModules = null;
+        $rollbackNodeModules = null;
         $targetCommit = null;
         $previousCommit = null;
         $previousPids = [];
@@ -465,6 +467,8 @@ final class DeployService
             $buildPath = self::NEXTJS_BUILD_ROOT . '/' . $projectKey . '/' . $deployId;
             $candidateNext = rtrim($path, '/') . '/.next.candidate-' . $deployId;
             $rollbackNext = rtrim($path, '/') . '/.next.rollback-' . $deployId;
+            $candidateNodeModules = rtrim($path, '/') . '/node_modules.candidate-' . $deployId;
+            $rollbackNodeModules = rtrim($path, '/') . '/node_modules.rollback-' . $deployId;
             $this->stdout[] = '[INFO] previous_commit=' . $previousCommit . ' target_commit=' . $targetCommit . ' build_path=' . $buildPath;
 
             $this->stdout[] = '[STEP] preflight filesystem';
@@ -522,38 +526,44 @@ final class DeployService
             if (!$this->copyCandidateNext($buildPath, $candidateNext)) {
                 return $this->fail('candidate .next 복사 실패');
             }
+            if (!$this->copyCandidateNodeModules($buildPath, $candidateNodeModules)) {
+                return $this->fail('candidate node_modules 복사 실패');
+            }
 
             $this->stdout[] = '[STEP] stop existing service';
             if (!$this->stopProjectSupervisor($path) || !$this->releaseProjectPort($port)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '기존 서비스 종료 실패: port=' . $port);
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '기존 서비스 종료 실패: port=' . $port);
             }
 
             $this->stdout[] = '[STEP] switch production commit';
             if (!$this->runCommand(['git', 'reset', '--hard', $targetCommit], $path)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '운영 프로젝트 git reset 실패');
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '운영 프로젝트 git reset 실패');
             }
 
             $this->stdout[] = '[STEP] install candidate build artifacts';
             if (!$this->installCandidateNext($path, $candidateNext, $rollbackNext)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '.next 교체 실패');
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '.next 교체 실패');
+            }
+            if (!$this->installCandidateNodeModules($path, $candidateNodeModules, $rollbackNodeModules)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'node_modules 교체 실패');
             }
 
             $this->stdout[] = '[STEP] start new service';
             if (!$this->startNextjsService($path, $port)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '신규 서비스 시작 실패');
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '신규 서비스 시작 실패');
             }
 
             $this->stdout[] = '[STEP] verify port listener';
             if (!$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS, $previousPids)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '포트 LISTEN 확인 실패');
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '포트 LISTEN 확인 실패');
             }
 
             $this->stdout[] = '[STEP] verify HTTP response';
             if (!$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, 'HTTP 응답 확인 실패');
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'HTTP 응답 확인 실패');
             }
             if ($this->appLogHasAddressInUse($path)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, 'app.log EADDRINUSE 확인');
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'app.log EADDRINUSE 확인');
             }
 
             $this->cleanupOldNextjsRollbacks($path);
@@ -570,6 +580,9 @@ final class DeployService
             }
             if ($candidateNext !== null && is_dir($candidateNext)) {
                 $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNext), null);
+            }
+            if ($candidateNodeModules !== null && is_dir($candidateNodeModules)) {
+                $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNodeModules), null);
             }
             $this->cleanupOldBuildDirectories(self::NEXTJS_BUILD_ROOT . '/' . $projectKey);
         }
@@ -702,6 +715,24 @@ final class DeployService
         return is_dir($candidateNext);
     }
 
+    private function copyCandidateNodeModules(string $buildPath, ?string $candidateNodeModules): bool
+    {
+        if ($candidateNodeModules === null) {
+            return true;
+        }
+        $source = rtrim($buildPath, '/') . '/node_modules';
+        if (!is_dir($source)) {
+            $this->stdout[] = '[NODE_MODULES] candidate node_modules not found; keeping production node_modules';
+            return true;
+        }
+        if (is_dir($candidateNodeModules) && !$this->runShellCommand('rm -rf ' . escapeshellarg($candidateNodeModules), null)) {
+            return false;
+        }
+        $this->stdout[] = '[NODE_MODULES] copy candidate node_modules to production filesystem before service stop';
+        return $this->runShellCommand('cp -a ' . escapeshellarg($source) . ' ' . escapeshellarg($candidateNodeModules), null)
+            && is_dir($candidateNodeModules);
+    }
+
     private function installCandidateNext(string $path, string $candidateNext, string $rollbackNext): bool
     {
         $currentNext = rtrim($path, '/') . '/.next';
@@ -727,6 +758,36 @@ final class DeployService
         return true;
     }
 
+    private function installCandidateNodeModules(string $path, ?string $candidateNodeModules, ?string $rollbackNodeModules): bool
+    {
+        if ($candidateNodeModules === null || !is_dir($candidateNodeModules)) {
+            $this->stdout[] = '[NODE_MODULES] no candidate node_modules switch needed';
+            return true;
+        }
+        if ($rollbackNodeModules === null) {
+            return $this->fail('node_modules rollback 경로가 없습니다.');
+        }
+
+        $currentNodeModules = rtrim($path, '/') . '/node_modules';
+        if (file_exists($rollbackNodeModules) || is_link($rollbackNodeModules)) {
+            return $this->fail('rollback node_modules 경로가 이미 존재합니다: ' . $rollbackNodeModules);
+        }
+        if (is_dir($currentNodeModules) || is_link($currentNodeModules)) {
+            if (!rename($currentNodeModules, $rollbackNodeModules)) {
+                return $this->fail('기존 node_modules rollback rename 실패');
+            }
+            $this->stdout[] = '[NODE_MODULES] current node_modules renamed to ' . $rollbackNodeModules;
+        }
+        if (!rename($candidateNodeModules, $currentNodeModules)) {
+            if ((is_dir($rollbackNodeModules) || is_link($rollbackNodeModules)) && !file_exists($currentNodeModules)) {
+                @rename($rollbackNodeModules, $currentNodeModules);
+            }
+            return $this->fail('candidate node_modules 활성화 rename 실패');
+        }
+        $this->stdout[] = '[NODE_MODULES] candidate node_modules activated';
+        return true;
+    }
+
     private function startNextjsService(string $path, int $port): bool
     {
         $startCommand = $this->nextjsBunStartCommand($port, $path);
@@ -734,7 +795,7 @@ final class DeployService
             . ' cwd=' . $path
             . ' expected_port=' . $port
             . ' app_log=' . rtrim($path, '/') . '/app.log'
-            . ' command=' . $startCommand;
+            . ' command=' . $this->sanitizeCommandForLog($startCommand);
         if (!$this->runLoginShellCommand($startCommand, $path)) {
             return false;
         }
@@ -742,7 +803,7 @@ final class DeployService
         return true;
     }
 
-    private function rollbackNextjsDeployment(string $path, int $port, string $previousCommit, ?string $rollbackNext, ?string $candidateNext, array $previousPids, string $reason): bool
+    private function rollbackNextjsDeployment(string $path, int $port, string $previousCommit, ?string $rollbackNext, ?string $candidateNext, ?string $rollbackNodeModules, ?string $candidateNodeModules, array $previousPids, string $reason): bool
     {
         $this->stderr[] = '[ROLLBACK] reason=' . $reason;
         $rollbackOk = true;
@@ -759,6 +820,19 @@ final class DeployService
         }
         if ($candidateNext !== null && is_dir($candidateNext)) {
             $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNext), null);
+        }
+        if ($rollbackNodeModules !== null && (is_dir($rollbackNodeModules) || is_link($rollbackNodeModules))) {
+            $this->stdout[] = '[ROLLBACK] restore previous node_modules';
+            $currentNodeModules = rtrim($path, '/') . '/node_modules';
+            if ((is_dir($currentNodeModules) || is_link($currentNodeModules)) && !$this->runShellCommand('rm -rf ' . escapeshellarg($currentNodeModules), null)) {
+                $rollbackOk = false;
+            }
+            if (!file_exists($currentNodeModules) && !@rename($rollbackNodeModules, $currentNodeModules)) {
+                $rollbackOk = false;
+            }
+        }
+        if ($candidateNodeModules !== null && is_dir($candidateNodeModules)) {
+            $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNodeModules), null);
         }
         $this->stdout[] = '[ROLLBACK] restore previous commit';
         if (!$this->runCommand(['git', 'reset', '--hard', $previousCommit], $path)) {
@@ -797,7 +871,7 @@ final class DeployService
 
     private function cleanupOldNextjsRollbacks(string $path): void
     {
-        $this->runShellCommand('find ' . escapeshellarg($path) . ' -maxdepth 1 -type d -name ' . escapeshellarg('.next.rollback-*') . ' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true', null);
+        $this->runShellCommand('find ' . escapeshellarg($path) . ' -maxdepth 1 -type d \( -name ' . escapeshellarg('.next.rollback-*') . ' -o -name ' . escapeshellarg('node_modules.rollback-*') . ' \) -mmin +1440 -exec rm -rf {} + 2>/dev/null || true', null);
     }
 
     private function cleanupOldBuildDirectories(string $projectBuildRoot): void
@@ -1471,6 +1545,8 @@ final class DeployService
         foreach (self::PROJECT_ENV_UNSET_KEYS as $key) {
             $command = preg_replace('/(' . preg_quote($key, '/') . '=)(?:' . "'[^']*'" . '|"[^"]*"|\S+)/', '$1[REDACTED]', $command) ?? $command;
         }
+        $command = preg_replace("#([A-Za-z][A-Za-z0-9+.-]*://)[^\\s'\"]+#", '$1[REDACTED]', $command) ?? $command;
+        $command = preg_replace('/\[REDACTED\](?:' . "'[^']*'" . '|"[^"]*"|\S*)/', '[REDACTED]', $command) ?? $command;
 
         return $command;
     }

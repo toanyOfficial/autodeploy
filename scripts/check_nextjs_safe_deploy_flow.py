@@ -45,5 +45,11 @@ require('bun install --frozen-lockfile' in source, 'safe flow must install depen
 require('[DEPENDENCY_INSTALL_FALLBACK]' in source and "runShellCommand('bun install', $buildPath)" in source,
         'safe flow must fall back to candidate-only bun install when frozen lockfile install fails')
 require('bun run build' in source and '$buildPath' in safe_flow, 'candidate build must run in the worktree path')
+require('copyCandidateNodeModules' in source and 'installCandidateNodeModules' in source,
+        'safe flow must switch candidate node_modules with rollback support')
+require('[ROLLBACK] restore previous node_modules' in source,
+        'safe flow must restore previous node_modules during rollback')
+require('sanitizeCommandForLog($startCommand)' in source,
+        'start command log must be sanitized')
 
 print('nextjs_bun_safe_flow=ok')
