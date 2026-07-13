@@ -646,9 +646,22 @@ final class DeployService
         if (!is_file(rtrim($buildPath, '/') . '/package.json')) {
             return $this->fail('package.json이 없어 nextjs_bun 의존성을 설치할 수 없습니다: ' . $buildPath);
         }
+
         $hasLock = is_file(rtrim($buildPath, '/') . '/bun.lock') || is_file(rtrim($buildPath, '/') . '/bun.lockb');
-        $command = $hasLock ? 'bun install --frozen-lockfile' : 'bun install';
-        return $this->runShellCommand($command, $buildPath);
+        if (!$hasLock) {
+            $this->stdout[] = '[DEPENDENCY_INSTALL] lockfile=none command="bun install"';
+            return $this->runShellCommand('bun install', $buildPath);
+        }
+
+        $this->stdout[] = '[DEPENDENCY_INSTALL] lockfile=present command="bun install --frozen-lockfile"';
+        $previousFailureReason = $this->failureReason;
+        if ($this->runShellCommand('bun install --frozen-lockfile', $buildPath)) {
+            return true;
+        }
+
+        $this->stdout[] = '[DEPENDENCY_INSTALL_FALLBACK] frozen lockfile install failed in candidate worktree; retrying candidate-only bun install without modifying production';
+        $this->failureReason = $previousFailureReason;
+        return $this->runShellCommand('bun install', $buildPath);
     }
 
     private function verifyNextjsCandidateArtifacts(string $buildPath): bool

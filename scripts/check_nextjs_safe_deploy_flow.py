@@ -42,6 +42,8 @@ for marker in [
 require("'rm -rf .next'" not in safe_flow, 'safe flow must not delete production .next before build')
 require("git', 'worktree', 'add', '--detach'" in source, 'safe flow must create detached git worktree')
 require('bun install --frozen-lockfile' in source, 'safe flow must install dependencies with frozen lockfile when possible')
+require('[DEPENDENCY_INSTALL_FALLBACK]' in source and "runShellCommand('bun install', $buildPath)" in source,
+        'safe flow must fall back to candidate-only bun install when frozen lockfile install fails')
 require('bun run build' in source and '$buildPath' in safe_flow, 'candidate build must run in the worktree path')
 
 print('nextjs_bun_safe_flow=ok')
