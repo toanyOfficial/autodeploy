@@ -28,6 +28,8 @@ final class DeployService
     private const DEFAULT_PORT_LISTEN_ATTEMPTS = 30;
     private const NEXTJS_BUN_PORT_LISTEN_ATTEMPTS = 90;
     private const PORT_LISTEN_INTERVAL_SECONDS = 2;
+    private const NEXTJS_BUILD_ROOT = '/srv/.auto-deploy-builds';
+    private const MIN_FREE_BYTES_FOR_NEXTJS_BUILD = 1073741824;
 
     private DeployProjectRepository $projects;
     private DeployVersionRepository $versions;
@@ -351,84 +353,15 @@ final class DeployService
             return false;
         }
 
+        if ($runtime === 'nextjs_bun') {
+            return $this->runNextjsBunSafeFlow($project, $targetRef);
+        }
+
         if (!$this->runCommand(['git', 'fetch', '--all'], $path)) {
             return $this->fail('git fetch --all 실패');
         }
         if (!$this->runCommand(['git', 'reset', '--hard', $targetRef], $path)) {
             return $this->fail('git reset --hard 실패');
-        }
-
-        if ($runtime === 'nextjs_bun') {
-            $startMode = 'nohup';
-            $this->logProjectPortConfiguration($project, $startMode);
-            $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s start_mode=%s path=%s port=%d',
-                (string) ($project['id'] ?? ''),
-                (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
-                $runtime,
-                $startMode,
-                $path,
-                $port
-            );
-
-            $this->stdout[] = '[STEP] stop legacy project supervisor before releasing port';
-            if (!$this->stopProjectSupervisor($path)) {
-                return $this->fail('기존 프로젝트 supervisor 종료 실패: ' . $path);
-            }
-
-            $this->stdout[] = '[STEP] release only this project port before build/start';
-            $beforeReleasePids = $this->portPids($port);
-            if (!$this->releaseProjectPort($port)) {
-                return $this->fail('프로젝트 포트 해제 실패: ' . $port);
-            }
-            $afterReleaseDetails = $this->portReadinessDetails($port);
-            if ((bool) $afterReleaseDetails['ready']) {
-                return $this->fail('프로젝트 포트가 해제되지 않아 빌드를 중단합니다: port=' . $port
-                    . ' pid=' . ($afterReleaseDetails['pid'] ?? 'unknown')
-                    . ' detail=' . (string) $afterReleaseDetails['detail']);
-            }
-
-            $this->stdout[] = '[STEP] clean .next';
-            if (!$this->runShellCommand('rm -rf .next', $path)) {
-                return $this->fail('rm -rf .next 실패');
-            }
-            $this->stdout[] = '[STEP] bun run build';
-            if (!$this->runShellCommand($this->projectEnvCommand('bun run build', $path), $path)) {
-                return $this->fail('bun run build 실패');
-            }
-
-            $startCommand = $this->nextjsBunStartCommand($port, $path);
-            $this->stdout[] = '[NOHUP_START] at=' . $this->now()
-                . ' cwd=' . $path
-                . ' expected_port=' . $port
-                . ' app_log=' . rtrim($path, '/') . '/app.log'
-                . ' command=' . $startCommand;
-            if (!$this->runLoginShellCommand($startCommand, $path)) {
-                return $this->fail('nohup 서비스 시작 실패: port=' . $port);
-            }
-            $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
-
-            if (!$this->waitForProjectPortListening(
-                $port,
-                self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS,
-                self::PORT_LISTEN_INTERVAL_SECONDS,
-                $beforeReleasePids
-            )) {
-                return $this->fail('포트 LISTEN 확인 실패: ' . $port . ' (runtime=nextjs_bun start_mode=nohup)');
-            }
-            if (!$this->waitForHttpResponse(
-                $port,
-                self::DEFAULT_PORT_LISTEN_ATTEMPTS,
-                self::PORT_LISTEN_INTERVAL_SECONDS
-            )) {
-                return $this->fail('HTTP 응답 확인 실패: port=' . $port . ' (runtime=nextjs_bun start_mode=nohup)');
-            }
-            if ($this->appLogHasAddressInUse($path)) {
-                return $this->fail('app.log에서 EADDRINUSE가 확인되었습니다: ' . rtrim($path, '/') . '/app.log');
-            }
-
-            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=nextjs_bun start_mode=nohup port=' . $port;
-            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: runtime=nextjs_bun start_mode=nohup port=' . $port;
-            return true;
         }
 
         if ($runtime === 'python_static') {
@@ -486,6 +419,393 @@ final class DeployService
         }
 
         return 'origin/' . $branchName;
+    }
+
+
+    private function runNextjsBunSafeFlow(array $project, string $targetRef): bool
+    {
+        $path = (string) $project['server_path'];
+        $port = (int) $project['port'];
+        $projectId = (int) ($project['id'] ?? 0);
+        $projectKey = $this->safeProjectKey((string) ($project['project_key'] ?? ('project-' . $projectId)));
+        $startMode = 'nohup';
+        $this->logProjectPortConfiguration($project, $startMode);
+        $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=nextjs_bun start_mode=%s path=%s port=%d',
+            (string) ($project['id'] ?? ''),
+            (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
+            $startMode,
+            $path,
+            $port
+        );
+
+        $worktreeCreated = false;
+        $buildPath = null;
+        $candidateNext = null;
+        $rollbackNext = null;
+        $targetCommit = null;
+        $previousCommit = null;
+        $previousPids = [];
+
+        try {
+            $this->stdout[] = '[STEP] fetch repository';
+            if (!$this->runCommand(['git', 'fetch', '--all'], $path)) {
+                return $this->fail('git fetch --all 실패');
+            }
+
+            $this->stdout[] = '[STEP] resolve target commit';
+            $targetCommit = $this->resolveGitCommit($path, $targetRef);
+            if ($targetCommit === null) {
+                return $this->fail('target commit 확정 실패: ' . $targetRef);
+            }
+            $previousCommit = $this->currentCommit($path);
+            if ($previousCommit === null) {
+                return $this->fail('기존 운영 commit 확인 실패');
+            }
+            $deployId = gmdate('Ymd_His') . '-' . $projectId . '-' . substr($targetCommit, 0, 12) . '-' . bin2hex(random_bytes(4));
+            $buildPath = self::NEXTJS_BUILD_ROOT . '/' . $projectKey . '/' . $deployId;
+            $candidateNext = rtrim($path, '/') . '/.next.candidate-' . $deployId;
+            $rollbackNext = rtrim($path, '/') . '/.next.rollback-' . $deployId;
+            $this->stdout[] = '[INFO] previous_commit=' . $previousCommit . ' target_commit=' . $targetCommit . ' build_path=' . $buildPath;
+
+            $this->stdout[] = '[STEP] preflight filesystem';
+            if (!$this->ensureNextjsBuildFilesystem($path, dirname($buildPath))) {
+                return false;
+            }
+
+            $this->stdout[] = '[STEP] create candidate worktree';
+            if (!$this->runCommand(['git', 'worktree', 'prune'], $path)) {
+                $this->stdout[] = '[WARN] git worktree prune failed; continuing with unique build path';
+                $this->failureReason = null;
+            }
+            if (!$this->runCommand(['git', 'worktree', 'add', '--detach', $buildPath, $targetCommit], $path)) {
+                $this->logSafeCandidateFailure('candidate worktree creation failed', $path, $port);
+                return $this->fail('candidate worktree 생성 실패');
+            }
+            $worktreeCreated = true;
+
+            $this->stdout[] = '[STEP] prepare candidate environment';
+            if (!$this->prepareCandidateEnvironment($path, $buildPath)) {
+                $this->logSafeCandidateFailure('candidate environment preparation failed', $path, $port);
+                return $this->fail('candidate 환경 준비 실패');
+            }
+
+            $this->stdout[] = '[STEP] install candidate dependencies';
+            if (!$this->installCandidateDependencies($buildPath)) {
+                $this->logSafeCandidateFailure('candidate dependency install failed', $path, $port);
+                return $this->fail('candidate 의존성 설치 실패');
+            }
+
+            $this->stdout[] = '[STEP] build candidate';
+            if (!$this->runShellCommand($this->projectEnvCommand('bun run build', $buildPath), $buildPath)) {
+                $this->stderr[] = '[FAIL] candidate build failed';
+                $this->stdout[] = '[INFO] existing service remains running';
+                $this->stdout[] = '[INFO] production directory was not modified';
+                $this->logExistingServiceState($port);
+                return $this->fail('candidate bun run build 실패');
+            }
+
+            $this->stdout[] = '[STEP] verify candidate artifacts';
+            if (!$this->verifyNextjsCandidateArtifacts($buildPath)) {
+                $this->logSafeCandidateFailure('candidate artifact verification failed', $path, $port);
+                return $this->fail('candidate .next 산출물 검증 실패');
+            }
+
+            $this->stdout[] = '[STEP] prepare production switch';
+            $previousPids = $this->portPids($port);
+            $this->stdout[] = '[SWITCH_INFO] previous_commit=' . $previousCommit
+                . ' target_commit=' . $targetCommit
+                . ' previous_pids=' . ($previousPids === [] ? 'none' : implode(',', $previousPids))
+                . ' port=' . $port
+                . ' previous_next_exists=' . (is_dir(rtrim($path, '/') . '/.next') ? 'yes' : 'no')
+                . ' rollback_next=' . $rollbackNext
+                . ' started_at=' . $this->now();
+            if (!$this->copyCandidateNext($buildPath, $candidateNext)) {
+                return $this->fail('candidate .next 복사 실패');
+            }
+
+            $this->stdout[] = '[STEP] stop existing service';
+            if (!$this->stopProjectSupervisor($path) || !$this->releaseProjectPort($port)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '기존 서비스 종료 실패: port=' . $port);
+            }
+
+            $this->stdout[] = '[STEP] switch production commit';
+            if (!$this->runCommand(['git', 'reset', '--hard', $targetCommit], $path)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '운영 프로젝트 git reset 실패');
+            }
+
+            $this->stdout[] = '[STEP] install candidate build artifacts';
+            if (!$this->installCandidateNext($path, $candidateNext, $rollbackNext)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '.next 교체 실패');
+            }
+
+            $this->stdout[] = '[STEP] start new service';
+            if (!$this->startNextjsService($path, $port)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '신규 서비스 시작 실패');
+            }
+
+            $this->stdout[] = '[STEP] verify port listener';
+            if (!$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS, $previousPids)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, '포트 LISTEN 확인 실패');
+            }
+
+            $this->stdout[] = '[STEP] verify HTTP response';
+            if (!$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, 'HTTP 응답 확인 실패');
+            }
+            if ($this->appLogHasAddressInUse($path)) {
+                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $previousPids, 'app.log EADDRINUSE 확인');
+            }
+
+            $this->cleanupOldNextjsRollbacks($path);
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=nextjs_bun start_mode=nohup port=' . $port . ' target_commit=' . $targetCommit;
+            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: runtime=nextjs_bun start_mode=nohup port=' . $port;
+            return true;
+        } finally {
+            $this->stdout[] = '[STEP] cleanup candidate worktree';
+            if ($worktreeCreated && $buildPath !== null) {
+                $this->runCommand(['git', 'worktree', 'remove', '--force', $buildPath], $path);
+                $this->runCommand(['git', 'worktree', 'prune'], $path);
+            } elseif ($buildPath !== null && is_dir($buildPath)) {
+                $this->runShellCommand('rm -rf ' . escapeshellarg($buildPath), null);
+            }
+            if ($candidateNext !== null && is_dir($candidateNext)) {
+                $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNext), null);
+            }
+            $this->cleanupOldBuildDirectories(self::NEXTJS_BUILD_ROOT . '/' . $projectKey);
+        }
+    }
+
+    private function resolveGitCommit(string $path, string $targetRef): ?string
+    {
+        $output = [];
+        $code = 0;
+        exec('cd ' . escapeshellarg($path) . ' && git rev-parse --verify ' . escapeshellarg($targetRef . '^{commit}') . ' 2>/dev/null', $output, $code);
+        if ($code !== 0 || trim((string) ($output[0] ?? '')) === '') {
+            return null;
+        }
+
+        return trim((string) $output[0]);
+    }
+
+    private function safeProjectKey(string $key): string
+    {
+        $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $key) ?: 'project';
+        return trim($safe, '._-') !== '' ? trim($safe, '._-') : 'project';
+    }
+
+    private function ensureNextjsBuildFilesystem(string $productionPath, string $buildParent): bool
+    {
+        if (!is_dir($productionPath) || !is_writable($productionPath)) {
+            return $this->fail('운영 프로젝트 경로에 쓸 수 없습니다: ' . $productionPath);
+        }
+        if (!is_dir($buildParent) && !mkdir($buildParent, 0755, true) && !is_dir($buildParent)) {
+            return $this->fail('임시 빌드 경로를 생성할 수 없습니다: ' . $buildParent);
+        }
+        if (!is_writable($buildParent)) {
+            return $this->fail('임시 빌드 경로에 쓸 수 없습니다: ' . $buildParent);
+        }
+        $free = @disk_free_space($productionPath);
+        if ($free !== false && $free < self::MIN_FREE_BYTES_FOR_NEXTJS_BUILD) {
+            return $this->fail('디스크 여유 공간이 부족합니다: free_bytes=' . (int) $free);
+        }
+        $this->stdout[] = '[DISK_CHECK] production_path=' . $productionPath . ' free_bytes=' . ($free === false ? 'unknown' : (string) (int) $free);
+        return true;
+    }
+
+    private function prepareCandidateEnvironment(string $productionPath, string $buildPath): bool
+    {
+        foreach ($this->candidateEnvFiles($productionPath) as $file) {
+            $target = rtrim($buildPath, '/') . '/' . basename($file);
+            if (file_exists($target) || is_link($target)) {
+                continue;
+            }
+            if (!symlink($file, $target)) {
+                return false;
+            }
+            $this->stdout[] = '[ENV_LINK] source=' . $file . ' target=' . $target;
+        }
+        return true;
+    }
+
+    /** @return array<int,string> */
+    private function candidateEnvFiles(string $productionPath): array
+    {
+        $names = ['.env', '.env.local', '.env.production', '.env.production.local'];
+        $files = [];
+        foreach ($names as $name) {
+            $file = rtrim($productionPath, '/') . '/' . $name;
+            if ((is_file($file) || is_link($file)) && is_readable($file)) {
+                $files[] = $file;
+            }
+        }
+        return $files;
+    }
+
+    private function installCandidateDependencies(string $buildPath): bool
+    {
+        if (!is_file(rtrim($buildPath, '/') . '/package.json')) {
+            return $this->fail('package.json이 없어 nextjs_bun 의존성을 설치할 수 없습니다: ' . $buildPath);
+        }
+
+        $hasLock = is_file(rtrim($buildPath, '/') . '/bun.lock') || is_file(rtrim($buildPath, '/') . '/bun.lockb');
+        if (!$hasLock) {
+            $this->stdout[] = '[DEPENDENCY_INSTALL] lockfile=none command="bun install"';
+            return $this->runShellCommand('bun install', $buildPath);
+        }
+
+        $this->stdout[] = '[DEPENDENCY_INSTALL] lockfile=present command="bun install --frozen-lockfile"';
+        $previousFailureReason = $this->failureReason;
+        if ($this->runShellCommand('bun install --frozen-lockfile', $buildPath)) {
+            return true;
+        }
+
+        $this->stdout[] = '[DEPENDENCY_INSTALL_FALLBACK] frozen lockfile install failed in candidate worktree; retrying candidate-only bun install without modifying production';
+        $this->failureReason = $previousFailureReason;
+        return $this->runShellCommand('bun install', $buildPath);
+    }
+
+    private function verifyNextjsCandidateArtifacts(string $buildPath): bool
+    {
+        $root = rtrim($buildPath, '/');
+        if (!is_file($root . '/package.json')) {
+            $this->stderr[] = '[ARTIFACT_FAIL] missing package.json';
+            return false;
+        }
+        if (!is_dir($root . '/.next')) {
+            $this->stderr[] = '[ARTIFACT_FAIL] missing .next directory';
+            return false;
+        }
+        $manifestCandidates = [
+            $root . '/.next/routes-manifest.json',
+            $root . '/.next/build-manifest.json',
+            $root . '/.next/prerender-manifest.json',
+            $root . '/.next/server/middleware-manifest.json',
+        ];
+        foreach ($manifestCandidates as $manifest) {
+            if (is_file($manifest)) {
+                $this->stdout[] = '[ARTIFACT_OK] manifest=' . $manifest;
+                return true;
+            }
+        }
+        $this->stderr[] = '[ARTIFACT_FAIL] no known Next.js manifest found under .next';
+        return false;
+    }
+
+    private function copyCandidateNext(string $buildPath, string $candidateNext): bool
+    {
+        if (is_dir($candidateNext) && !$this->runShellCommand('rm -rf ' . escapeshellarg($candidateNext), null)) {
+            return false;
+        }
+        if (!$this->runShellCommand('cp -a ' . escapeshellarg(rtrim($buildPath, '/') . '/.next') . ' ' . escapeshellarg($candidateNext), null)) {
+            return false;
+        }
+        return is_dir($candidateNext);
+    }
+
+    private function installCandidateNext(string $path, string $candidateNext, string $rollbackNext): bool
+    {
+        $currentNext = rtrim($path, '/') . '/.next';
+        if (file_exists($rollbackNext) || is_link($rollbackNext)) {
+            return $this->fail('rollback .next 경로가 이미 존재합니다: ' . $rollbackNext);
+        }
+        if (!is_dir($candidateNext)) {
+            return $this->fail('candidate .next 경로가 없습니다: ' . $candidateNext);
+        }
+        if (is_dir($currentNext) || is_link($currentNext)) {
+            if (!rename($currentNext, $rollbackNext)) {
+                return $this->fail('기존 .next rollback rename 실패');
+            }
+            $this->stdout[] = '[SWITCH_NEXT] current .next renamed to ' . $rollbackNext;
+        }
+        if (!rename($candidateNext, $currentNext)) {
+            if ((is_dir($rollbackNext) || is_link($rollbackNext)) && !file_exists($currentNext)) {
+                @rename($rollbackNext, $currentNext);
+            }
+            return $this->fail('candidate .next 활성화 rename 실패');
+        }
+        $this->stdout[] = '[SWITCH_NEXT] candidate .next activated';
+        return true;
+    }
+
+    private function startNextjsService(string $path, int $port): bool
+    {
+        $startCommand = $this->nextjsBunStartCommand($port, $path);
+        $this->stdout[] = '[NOHUP_START] at=' . $this->now()
+            . ' cwd=' . $path
+            . ' expected_port=' . $port
+            . ' app_log=' . rtrim($path, '/') . '/app.log'
+            . ' command=' . $startCommand;
+        if (!$this->runLoginShellCommand($startCommand, $path)) {
+            return false;
+        }
+        $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
+        return true;
+    }
+
+    private function rollbackNextjsDeployment(string $path, int $port, string $previousCommit, ?string $rollbackNext, ?string $candidateNext, array $previousPids, string $reason): bool
+    {
+        $this->stderr[] = '[ROLLBACK] reason=' . $reason;
+        $rollbackOk = true;
+        $this->releaseProjectPort($port, 10);
+        if ($rollbackNext !== null && (is_dir($rollbackNext) || is_link($rollbackNext))) {
+            $this->stdout[] = '[ROLLBACK] restore previous .next';
+            $currentNext = rtrim($path, '/') . '/.next';
+            if ((is_dir($currentNext) || is_link($currentNext)) && !$this->runShellCommand('rm -rf ' . escapeshellarg($currentNext), null)) {
+                $rollbackOk = false;
+            }
+            if (!file_exists($currentNext) && !@rename($rollbackNext, $currentNext)) {
+                $rollbackOk = false;
+            }
+        }
+        if ($candidateNext !== null && is_dir($candidateNext)) {
+            $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNext), null);
+        }
+        $this->stdout[] = '[ROLLBACK] restore previous commit';
+        if (!$this->runCommand(['git', 'reset', '--hard', $previousCommit], $path)) {
+            $rollbackOk = false;
+        }
+        $this->stdout[] = '[ROLLBACK] restart previous service';
+        if (!$this->startNextjsService($path, $port)
+            || !$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)
+            || !$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
+            $rollbackOk = false;
+        }
+        if ($rollbackOk) {
+            $this->stdout[] = '[ROLLBACK SUCCESS] previous service healthy';
+            return $this->fail($reason . ' (rollback 성공)');
+        }
+        $this->stderr[] = '[CRITICAL] deployment failed and rollback failed';
+        return $this->fail($reason . ' (rollback 실패)');
+    }
+
+    private function logSafeCandidateFailure(string $reason, string $path, int $port): void
+    {
+        $this->stderr[] = '[FAIL] ' . $reason;
+        $this->stdout[] = '[SAFE] existing production service was not stopped';
+        $this->stdout[] = '[SAFE] existing production .next was not modified';
+        $this->stdout[] = '[SAFE] production directory was not modified';
+        $this->logExistingServiceState($port);
+    }
+
+    private function logExistingServiceState(int $port): void
+    {
+        $details = $this->portReadinessDetails($port);
+        $this->stdout[] = '[INFO] existing service listen=' . ((bool) $details['ready'] ? 'yes' : 'no')
+            . ' pid=' . ($details['pid'] ?? 'unknown')
+            . ' detail=' . (string) $details['detail'];
+    }
+
+    private function cleanupOldNextjsRollbacks(string $path): void
+    {
+        $this->runShellCommand('find ' . escapeshellarg($path) . ' -maxdepth 1 -type d -name ' . escapeshellarg('.next.rollback-*') . ' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true', null);
+    }
+
+    private function cleanupOldBuildDirectories(string $projectBuildRoot): void
+    {
+        if (!is_dir($projectBuildRoot)) {
+            return;
+        }
+        $this->runShellCommand('find ' . escapeshellarg($projectBuildRoot) . ' -mindepth 1 -maxdepth 1 -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null || true', null);
     }
 
     private function validateProject(array $project): void
@@ -1146,6 +1466,15 @@ final class DeployService
         return 'timeout --kill-after=5s ' . (int) $timeout . 's bash -lc ' . escapeshellarg($command);
     }
 
+    private function sanitizeCommandForLog(string $command): string
+    {
+        foreach (self::PROJECT_ENV_UNSET_KEYS as $key) {
+            $command = preg_replace('/(' . preg_quote($key, '/') . '=)(?:' . "'[^']*'" . '|"[^"]*"|\S+)/', '$1[REDACTED]', $command) ?? $command;
+        }
+
+        return $command;
+    }
+
     private function runShellCommand(string $command, ?string $cwd): bool
     {
         if (!$this->ensureProjectTimeRemaining('명령 실행 전')) {
@@ -1154,20 +1483,21 @@ final class DeployService
 
         $timeout = min(self::COMMAND_TIMEOUT_SECONDS, $this->remainingProjectSeconds());
         if ($timeout <= 0) {
-            return $this->fail('프로젝트 배포 타임아웃으로 명령을 실행하지 않습니다: ' . $command);
+            return $this->fail('프로젝트 배포 타임아웃으로 명령을 실행하지 않습니다: ' . $this->sanitizeCommandForLog($command));
         }
 
-        $this->stdout[] = '$ ' . $command;
+        $logCommand = $this->sanitizeCommandForLog($command);
+        $this->stdout[] = '$ ' . $logCommand;
         $this->stdout[] = 'command timeout: ' . $timeout . 's';
         $timedCommand = $this->timedShellCommand($command, $timeout);
-        $this->stdout[] = '$ ' . $timedCommand;
+        $this->stdout[] = '$ ' . $this->sanitizeCommandForLog($timedCommand);
         $descriptor = [
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
         $process = proc_open($timedCommand, $descriptor, $pipes, $cwd ?: null);
         if (!is_resource($process)) {
-            $this->failureReason = '명령 실행을 시작할 수 없습니다: ' . $command;
+            $this->failureReason = '명령 실행을 시작할 수 없습니다: ' . $logCommand;
             return false;
         }
 
@@ -1215,21 +1545,21 @@ final class DeployService
             $this->stdout[] = trim($stdout);
         }
         if ($stderr !== '') {
-            $this->stderr[] = '$ ' . $command;
+            $this->stderr[] = '$ ' . $logCommand;
             $this->stderr[] = trim($stderr);
         }
 
         if ($timedOut) {
-            $this->stderr[] = '명령 타임아웃: ' . $command . ' (timeout ' . $timeout . 's)';
-            $this->failureReason = $this->failureReason ?? '명령 타임아웃: ' . $command;
+            $this->stderr[] = '명령 타임아웃: ' . $logCommand . ' (timeout ' . $timeout . 's)';
+            $this->failureReason = $this->failureReason ?? '명령 타임아웃: ' . $logCommand;
             return false;
         }
 
         $this->stdout[] = 'exit code: ' . $code;
         if ($code === 124 && $this->failureReason === null) {
-            $this->failureReason = '명령 타임아웃: ' . $command . ' (timeout ' . $timeout . 's)';
+            $this->failureReason = '명령 타임아웃: ' . $logCommand . ' (timeout ' . $timeout . 's)';
         } elseif ($code !== 0 && $this->failureReason === null) {
-            $this->failureReason = '명령 실패: ' . $command . ' (exit code ' . $code . ')';
+            $this->failureReason = '명령 실패: ' . $logCommand . ' (exit code ' . $code . ')';
         }
 
         return $code === 0;
