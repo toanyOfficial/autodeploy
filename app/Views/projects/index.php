@@ -360,7 +360,7 @@ $siteUrlForProject = static function (array $project): ?string {
                 <label><span>domain</span><input name="domain" maxlength="255" placeholder="https://example.com"></label>
                 <label><span>서버 경로</span><input name="server_path" maxlength="255" required></label>
                 <label><span>포트</span><input name="port" type="number" min="1" max="65535" required></label>
-                <label><span>runtime_type</span><input name="runtime_type" maxlength="50" placeholder="python_static 또는 nextjs_bun" required></label>
+                <label><span>runtime_type</span><input name="runtime_type" maxlength="50" placeholder="python_static, nextjs_bun 또는 node_app" required></label>
                 <label><span>branch_name</span><input value="main" disabled></label>
                 <button type="submit" class="primary-button">프로젝트 등록</button>
             </form>
