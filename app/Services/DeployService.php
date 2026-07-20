@@ -29,6 +29,7 @@ final class DeployService
     private const NEXTJS_BUN_PORT_LISTEN_ATTEMPTS = 90;
     private const PORT_LISTEN_INTERVAL_SECONDS = 2;
     private const NEXTJS_BUILD_ROOT = '/srv/.auto-deploy-builds';
+    private const NODE_APP_BUILD_ROOT = '/srv/.auto-deploy-builds-node';
     private const MIN_FREE_BYTES_FOR_NEXTJS_BUILD = 1073741824;
 
     private DeployProjectRepository $projects;
@@ -357,6 +358,10 @@ final class DeployService
             return $this->runNextjsBunSafeFlow($project, $targetRef);
         }
 
+        if ($runtime === 'node_app') {
+            return $this->runNodeAppSafeFlow($project, $targetRef);
+        }
+
         if (!$this->runCommand(['git', 'fetch', '--all'], $path)) {
             return $this->fail('git fetch --all 실패');
         }
@@ -585,6 +590,165 @@ final class DeployService
                 $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNodeModules), null);
             }
             $this->cleanupOldBuildDirectories(self::NEXTJS_BUILD_ROOT . '/' . $projectKey);
+        }
+    }
+
+
+    private function runNodeAppSafeFlow(array $project, string $targetRef): bool
+    {
+        $path = (string) $project['server_path'];
+        $port = (int) $project['port'];
+        $projectId = (int) ($project['id'] ?? 0);
+        $projectKey = $this->safeProjectKey((string) ($project['project_key'] ?? ('project-' . $projectId)));
+        $startMode = 'nohup';
+        $this->logProjectPortConfiguration($project, $startMode);
+        $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=node_app start_mode=%s path=%s port=%d',
+            (string) ($project['id'] ?? ''),
+            (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
+            $startMode,
+            $path,
+            $port
+        );
+
+        $worktreeCreated = false;
+        $buildPath = null;
+        $targetCommit = null;
+        $previousCommit = null;
+        $previousPids = [];
+        $candidateNodeModules = null;
+        $rollbackNodeModules = null;
+        $candidateArtifacts = [];
+        $rollbackArtifacts = [];
+
+        try {
+            $this->stdout[] = '[STEP] fetch repository';
+            if (!$this->runCommand(['git', 'fetch', '--all'], $path)) {
+                return $this->fail('git fetch --all 실패');
+            }
+
+            $this->stdout[] = '[STEP] resolve target commit';
+            $targetCommit = $this->resolveGitCommit($path, $targetRef);
+            if ($targetCommit === null) {
+                return $this->fail('target commit 확정 실패: ' . $targetRef);
+            }
+            $previousCommit = $this->currentCommit($path);
+            if ($previousCommit === null) {
+                return $this->fail('기존 운영 commit 확인 실패');
+            }
+
+            $deployId = gmdate('Ymd_His') . '-' . $projectId . '-' . substr($targetCommit, 0, 12) . '-' . bin2hex(random_bytes(4));
+            $buildPath = self::NODE_APP_BUILD_ROOT . '/' . $projectKey . '/' . $deployId;
+            $candidateNodeModules = rtrim($path, '/') . '/node_modules.candidate-' . $deployId;
+            $rollbackNodeModules = rtrim($path, '/') . '/node_modules.rollback-' . $deployId;
+            $this->stdout[] = '[INFO] previous_commit=' . $previousCommit . ' target_commit=' . $targetCommit . ' build_path=' . $buildPath;
+
+            $this->stdout[] = '[STEP] preflight filesystem';
+            if (!$this->ensureNextjsBuildFilesystem($path, dirname($buildPath))) {
+                return false;
+            }
+
+            $this->stdout[] = '[STEP] create candidate worktree';
+            if (!$this->runCommand(['git', 'worktree', 'prune'], $path)) {
+                $this->stdout[] = '[WARN] git worktree prune failed; continuing with unique build path';
+                $this->failureReason = null;
+            }
+            if (!$this->runCommand(['git', 'worktree', 'add', '--detach', $buildPath, $targetCommit], $path)) {
+                $this->logNodeCandidateFailure('candidate worktree creation failed', $port);
+                return $this->fail('node_app candidate worktree 생성 실패');
+            }
+            $worktreeCreated = true;
+
+            $this->stdout[] = '[STEP] prepare candidate environment';
+            if (!$this->prepareCandidateEnvironment($path, $buildPath)) {
+                $this->logNodeCandidateFailure('candidate environment preparation failed', $port);
+                return $this->fail('node_app candidate 환경 준비 실패');
+            }
+
+            $packageManager = $this->nodePackageManager($buildPath);
+            $this->stdout[] = '[NODE_APP] package_manager=' . $packageManager;
+
+            $this->stdout[] = '[STEP] install candidate dependencies';
+            if (!$this->installNodeAppDependencies($buildPath, $packageManager)) {
+                $this->logNodeCandidateFailure('candidate dependency install failed', $port);
+                return $this->fail('node_app candidate 의존성 설치 실패');
+            }
+
+            if ($this->packageScriptExists($buildPath, 'build')) {
+                $this->stdout[] = '[STEP] build candidate';
+                if (!$this->runShellCommand($this->projectEnvCommand($this->nodeRunScriptCommand($packageManager, 'build'), $buildPath), $buildPath)) {
+                    $this->logNodeCandidateFailure('candidate build failed', $port);
+                    return $this->fail('node_app candidate build 실패');
+                }
+            } else {
+                $this->stdout[] = '[STEP] build candidate skipped: package.json scripts.build 없음';
+            }
+
+            $this->stdout[] = '[STEP] verify candidate start command';
+            if (!$this->nodeStartCommand($buildPath, $port, $packageManager)) {
+                $this->logNodeCandidateFailure('candidate start command missing', $port);
+                return $this->fail('node_app 시작 명령을 찾을 수 없습니다. package.json scripts.start 또는 server.js/app.js/index.js가 필요합니다.');
+            }
+
+            $this->stdout[] = '[STEP] prepare production switch';
+            $previousPids = $this->portPids($port);
+            if (!$this->copyCandidateNodeModules($buildPath, $candidateNodeModules)) {
+                return $this->fail('candidate node_modules 복사 실패');
+            }
+            $candidateArtifacts = $this->prepareNodeCandidateArtifacts($path, $buildPath, $deployId);
+
+            $this->stdout[] = '[STEP] stop existing service';
+            if (!$this->stopProjectSupervisor($path) || !$this->releaseProjectPort($port)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '기존 서비스 종료 실패: port=' . $port);
+            }
+
+            $this->stdout[] = '[STEP] switch production commit';
+            if (!$this->runCommand(['git', 'reset', '--hard', $targetCommit], $path)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '운영 프로젝트 git reset 실패');
+            }
+
+            $this->stdout[] = '[STEP] install candidate node_modules and artifacts';
+            if (!$this->installCandidateNodeModules($path, $candidateNodeModules, $rollbackNodeModules)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'node_modules 교체 실패');
+            }
+            if (!$this->installNodeCandidateArtifacts($path, $candidateArtifacts, $rollbackArtifacts)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '빌드 산출물 교체 실패');
+            }
+
+            $this->stdout[] = '[STEP] start new service';
+            if (!$this->startNodeAppService($path, $port)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '신규 서비스 시작 실패');
+            }
+            if (!$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS, $previousPids)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '포트 LISTEN 확인 실패');
+            }
+            if (!$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'HTTP 응답 확인 실패');
+            }
+            if ($this->appLogHasAddressInUse($path)) {
+                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'app.log EADDRINUSE 확인');
+            }
+
+            $this->cleanupOldNodeAppRollbacks($path);
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=node_app start_mode=nohup port=' . $port . ' target_commit=' . $targetCommit;
+            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트/HTTP 확인 완료: runtime=node_app start_mode=nohup port=' . $port;
+            return true;
+        } finally {
+            $this->stdout[] = '[STEP] cleanup node_app candidate worktree';
+            if ($worktreeCreated && $buildPath !== null) {
+                $this->runCommand(['git', 'worktree', 'remove', '--force', $buildPath], $path);
+                $this->runCommand(['git', 'worktree', 'prune'], $path);
+            } elseif ($buildPath !== null && is_dir($buildPath)) {
+                $this->runShellCommand('rm -rf ' . escapeshellarg($buildPath), null);
+            }
+            if ($candidateNodeModules !== null && is_dir($candidateNodeModules)) {
+                $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNodeModules), null);
+            }
+            foreach ($candidateArtifacts as $candidatePath) {
+                if (is_dir($candidatePath) || is_file($candidatePath) || is_link($candidatePath)) {
+                    $this->runShellCommand('rm -rf ' . escapeshellarg($candidatePath), null);
+                }
+            }
+            $this->cleanupOldBuildDirectories(self::NODE_APP_BUILD_ROOT . '/' . $projectKey);
         }
     }
 
@@ -1038,6 +1202,224 @@ final class DeployService
         $signal = strtoupper($signal) === 'KILL' ? 'KILL' : 'TERM';
         $this->stdout[] = '[PORT_RELEASE_KILL] signal=' . $signal . ' pid=' . implode(',', $pids);
         exec('kill -s ' . $signal . ' ' . implode(' ', array_map('escapeshellarg', $pids)) . ' 2>/dev/null || true');
+    }
+
+
+    private function nodePackageManager(string $path): string
+    {
+        $root = rtrim($path, '/');
+        if (is_file($root . '/bun.lock') || is_file($root . '/bun.lockb')) {
+            return 'bun';
+        }
+        if (is_file($root . '/pnpm-lock.yaml')) {
+            return 'pnpm';
+        }
+        if (is_file($root . '/yarn.lock')) {
+            return 'yarn';
+        }
+        return 'npm';
+    }
+
+    private function installNodeAppDependencies(string $buildPath, string $packageManager): bool
+    {
+        if (!is_file(rtrim($buildPath, '/') . '/package.json')) {
+            return $this->fail('package.json이 없어 node_app 의존성을 설치할 수 없습니다: ' . $buildPath);
+        }
+
+        $command = match ($packageManager) {
+            'bun' => (is_file(rtrim($buildPath, '/') . '/bun.lock') || is_file(rtrim($buildPath, '/') . '/bun.lockb')) ? 'bun install --frozen-lockfile' : 'bun install',
+            'pnpm' => 'pnpm install --frozen-lockfile',
+            'yarn' => 'yarn install --frozen-lockfile',
+            default => is_file(rtrim($buildPath, '/') . '/package-lock.json') ? 'npm ci' : 'npm install',
+        };
+
+        $this->stdout[] = '[NODE_APP_DEPENDENCY_INSTALL] command=' . $command;
+        return $this->runShellCommand($this->projectEnvCommand($command, $buildPath), $buildPath);
+    }
+
+    private function packageScriptExists(string $path, string $script): bool
+    {
+        $package = $this->readPackageJson($path);
+        return isset($package['scripts']) && is_array($package['scripts']) && isset($package['scripts'][$script]) && trim((string) $package['scripts'][$script]) !== '';
+    }
+
+    private function nodeRunScriptCommand(string $packageManager, string $script): string
+    {
+        return match ($packageManager) {
+            'bun' => 'bun run ' . escapeshellarg($script),
+            'pnpm' => 'pnpm run ' . escapeshellarg($script),
+            'yarn' => 'yarn run ' . escapeshellarg($script),
+            default => 'npm run ' . escapeshellarg($script),
+        };
+    }
+
+    private function nodeStartCommand(string $path, int $port, ?string $packageManager = null): ?string
+    {
+        $packageManager = $packageManager ?? $this->nodePackageManager($path);
+        $prefix = 'PORT=' . escapeshellarg((string) $port) . ' HOST=0.0.0.0 HOSTNAME=0.0.0.0 ';
+        if ($this->packageScriptExists($path, 'start')) {
+            return $prefix . $this->nodeRunScriptCommand($packageManager, 'start');
+        }
+
+        foreach (['server.js', 'app.js', 'index.js'] as $entrypoint) {
+            if (is_file(rtrim($path, '/') . '/' . $entrypoint)) {
+                return $prefix . 'node ' . escapeshellarg($entrypoint);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function readPackageJson(string $path): array
+    {
+        $file = rtrim($path, '/') . '/package.json';
+        if (!is_file($file) || !is_readable($file)) {
+            return [];
+        }
+        $decoded = json_decode((string) file_get_contents($file), true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function prepareNodeCandidateArtifacts(string $path, string $buildPath, string $deployId): array
+    {
+        $artifacts = [];
+        foreach (['dist', 'build', 'out'] as $name) {
+            $source = rtrim($buildPath, '/') . '/' . $name;
+            if (!is_dir($source)) {
+                continue;
+            }
+            $candidate = rtrim($path, '/') . '/' . $name . '.candidate-' . $deployId;
+            if (is_dir($candidate) && !$this->runShellCommand('rm -rf ' . escapeshellarg($candidate), null)) {
+                continue;
+            }
+            if ($this->runShellCommand('cp -a ' . escapeshellarg($source) . ' ' . escapeshellarg($candidate), null) && is_dir($candidate)) {
+                $artifacts[$name] = $candidate;
+                $this->stdout[] = '[NODE_APP_ARTIFACT] prepared name=' . $name . ' candidate=' . $candidate;
+            }
+        }
+        return $artifacts;
+    }
+
+    /**
+     * @param array<string,string> $candidateArtifacts
+     * @param array<string,string> $rollbackArtifacts
+     */
+    private function installNodeCandidateArtifacts(string $path, array $candidateArtifacts, array &$rollbackArtifacts): bool
+    {
+        foreach ($candidateArtifacts as $name => $candidate) {
+            $current = rtrim($path, '/') . '/' . $name;
+            $rollback = rtrim($path, '/') . '/' . $name . '.rollback-' . basename($candidate);
+            if (file_exists($rollback) || is_link($rollback)) {
+                return $this->fail('rollback 산출물 경로가 이미 존재합니다: ' . $rollback);
+            }
+            if (is_dir($current) || is_link($current)) {
+                if (!rename($current, $rollback)) {
+                    return $this->fail('기존 산출물 rollback rename 실패: ' . $name);
+                }
+                $rollbackArtifacts[$name] = $rollback;
+                $this->stdout[] = '[NODE_APP_ARTIFACT] current renamed name=' . $name . ' rollback=' . $rollback;
+            }
+            if (!rename($candidate, $current)) {
+                if (isset($rollbackArtifacts[$name]) && !file_exists($current)) {
+                    @rename($rollbackArtifacts[$name], $current);
+                    unset($rollbackArtifacts[$name]);
+                }
+                return $this->fail('candidate 산출물 활성화 rename 실패: ' . $name);
+            }
+            $this->stdout[] = '[NODE_APP_ARTIFACT] candidate activated name=' . $name;
+        }
+        return true;
+    }
+
+    private function startNodeAppService(string $path, int $port): bool
+    {
+        $command = $this->nodeStartCommand($path, $port);
+        if ($command === null) {
+            return false;
+        }
+        $startCommand = $this->closeInheritedFileDescriptorsCommand()
+            . '; nohup '
+            . $this->projectEnvCommand($command, $path)
+            . ' > app.log 2>&1 < /dev/null &';
+        $this->stdout[] = '[NOHUP_START] at=' . $this->now()
+            . ' cwd=' . $path
+            . ' expected_port=' . $port
+            . ' app_log=' . rtrim($path, '/') . '/app.log'
+            . ' command=' . $this->sanitizeCommandForLog($startCommand);
+        if (!$this->runLoginShellCommand($startCommand, $path)) {
+            return false;
+        }
+        $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
+        return true;
+    }
+
+    /**
+     * @param array<string,string> $candidateArtifacts
+     * @param array<string,string> $rollbackArtifacts
+     * @param array<int,string> $previousPids
+     */
+    private function rollbackNodeAppDeployment(string $path, int $port, string $previousCommit, ?string $rollbackNodeModules, ?string $candidateNodeModules, array $candidateArtifacts, array $rollbackArtifacts, array $previousPids, string $reason): bool
+    {
+        $this->stderr[] = '[ROLLBACK] reason=' . $reason;
+        $rollbackOk = true;
+        $this->releaseProjectPort($port, 10);
+        foreach ($candidateArtifacts as $name => $candidate) {
+            $current = rtrim($path, '/') . '/' . $name;
+            if ((is_dir($current) || is_link($current)) && !$this->runShellCommand('rm -rf ' . escapeshellarg($current), null)) {
+                $rollbackOk = false;
+            }
+            if (isset($rollbackArtifacts[$name]) && (is_dir($rollbackArtifacts[$name]) || is_link($rollbackArtifacts[$name])) && !@rename($rollbackArtifacts[$name], $current)) {
+                $rollbackOk = false;
+            }
+            if (is_dir($candidate) || is_link($candidate)) {
+                $this->runShellCommand('rm -rf ' . escapeshellarg($candidate), null);
+            }
+        }
+        if ($rollbackNodeModules !== null && (is_dir($rollbackNodeModules) || is_link($rollbackNodeModules))) {
+            $currentNodeModules = rtrim($path, '/') . '/node_modules';
+            if ((is_dir($currentNodeModules) || is_link($currentNodeModules)) && !$this->runShellCommand('rm -rf ' . escapeshellarg($currentNodeModules), null)) {
+                $rollbackOk = false;
+            }
+            if (!file_exists($currentNodeModules) && !@rename($rollbackNodeModules, $currentNodeModules)) {
+                $rollbackOk = false;
+            }
+        }
+        if ($candidateNodeModules !== null && is_dir($candidateNodeModules)) {
+            $this->runShellCommand('rm -rf ' . escapeshellarg($candidateNodeModules), null);
+        }
+        if (!$this->runCommand(['git', 'reset', '--hard', $previousCommit], $path)) {
+            $rollbackOk = false;
+        }
+        if (!$this->startNodeAppService($path, $port)
+            || !$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)
+            || !$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
+            $rollbackOk = false;
+        }
+        if ($rollbackOk) {
+            $this->stdout[] = '[ROLLBACK SUCCESS] previous node_app service healthy';
+            return $this->fail($reason . ' (rollback 성공)');
+        }
+        $this->stderr[] = '[CRITICAL] node_app deployment failed and rollback failed';
+        return $this->fail($reason . ' (rollback 실패)');
+    }
+
+    private function logNodeCandidateFailure(string $reason, int $port): void
+    {
+        $this->stderr[] = '[FAIL] ' . $reason;
+        $this->stdout[] = '[SAFE] existing production service was not stopped';
+        $this->stdout[] = '[SAFE] production directory was not modified';
+        $this->logExistingServiceState($port);
+    }
+
+    private function cleanupOldNodeAppRollbacks(string $path): void
+    {
+        $this->runShellCommand('find ' . escapeshellarg($path) . ' -maxdepth 1 -type d \( -name ' . escapeshellarg('node_modules.rollback-*') . ' -o -name ' . escapeshellarg('*.rollback-*') . ' \) -mmin +1440 -exec rm -rf {} + 2>/dev/null || true', null);
     }
 
     private function nextjsBunStartCommand(int $port, string $path): string
