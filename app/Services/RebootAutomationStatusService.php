@@ -7,6 +7,14 @@ final class RebootAutomationStatusService
     private const AUTO_REBOOT_SCRIPT = '/usr/local/sbin/auto-reboot-deploy.sh';
     private const POST_REBOOT_SCRIPT = '/usr/local/sbin/dandorak-post-reboot.sh';
     private const SYSTEMD_SERVICE = '/etc/systemd/system/dandorak-post-reboot.service';
+    private const AUTO_DEPLOY_WEB_SERVICE = '/etc/systemd/system/auto-deploy-web.service';
+    private const PROJECT_SYSTEMD_TEMPLATE = '/etc/systemd/system/auto-deploy-project@.service';
+    private const PROJECT_RUNNER = '/usr/local/bin/auto-deploy-project-runner';
+    private const PROJECT_CONTROL = '/usr/local/sbin/auto-deploy-project-control';
+    private const AUTO_DEPLOY_WEB_CONTROL = '/usr/local/sbin/auto-deploy-web-control';
+    private const PROJECT_SUDOERS = '/etc/sudoers.d/auto-deploy-project-systemd';
+    private const WEB_SUDOERS = '/etc/sudoers.d/auto-deploy-web-systemd';
+    private const STATE_DIR = '/var/lib/auto_deploy';
     private const LOG_DIR = '/var/log/auto_deploy';
     private const LOG_FILE = '/var/log/auto_deploy/reboot-deploy.log';
 
@@ -19,6 +27,14 @@ final class RebootAutomationStatusService
             $this->pathCheck('auto_reboot_script', 'auto-reboot-deploy.sh', self::AUTO_REBOOT_SCRIPT, 'file', true),
             $this->pathCheck('post_reboot_script', 'dandorak-post-reboot.sh', self::POST_REBOOT_SCRIPT, 'file', true),
             $this->pathCheck('systemd_service', 'dandorak-post-reboot.service', self::SYSTEMD_SERVICE, 'file', false),
+            $this->pathCheck('auto_deploy_web_service', 'auto-deploy-web.service', self::AUTO_DEPLOY_WEB_SERVICE, 'file', false),
+            $this->pathCheck('project_systemd_template', 'auto-deploy-project@.service', self::PROJECT_SYSTEMD_TEMPLATE, 'file', false),
+            $this->pathCheck('project_runner', 'auto-deploy-project-runner', self::PROJECT_RUNNER, 'file', true),
+            $this->pathCheck('project_control', 'auto-deploy-project-control', self::PROJECT_CONTROL, 'file', true),
+            $this->pathCheck('auto_deploy_web_control', 'auto-deploy-web-control', self::AUTO_DEPLOY_WEB_CONTROL, 'file', true),
+            $this->pathCheck('project_sudoers', 'auto-deploy-project-systemd sudoers', self::PROJECT_SUDOERS, 'file', false),
+            $this->pathCheck('web_sudoers', 'auto-deploy-web-systemd sudoers', self::WEB_SUDOERS, 'file', false),
+            $this->pathCheck('state_dir', 'auto deploy state directory', self::STATE_DIR, 'dir', false),
             $this->pathCheck('log_dir', 'reboot deploy log directory', self::LOG_DIR, 'dir', false),
             $this->pathCheck('log_file', 'reboot deploy log file', self::LOG_FILE, 'file', false),
             $this->sudoCheck(),

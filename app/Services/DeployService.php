@@ -31,6 +31,8 @@ final class DeployService
     private const NEXTJS_BUILD_ROOT = '/srv/.auto-deploy-builds';
     private const NODE_APP_BUILD_ROOT = '/srv/.auto-deploy-builds-node';
     private const MIN_FREE_BYTES_FOR_NEXTJS_BUILD = 1073741824;
+    private const PROJECT_SYSTEMD_CONTROL = '/usr/local/sbin/auto-deploy-project-control';
+    private const PROJECT_SYSTEMD_UNIT_PREFIX = 'auto-deploy-project@';
 
     private DeployProjectRepository $projects;
     private DeployVersionRepository $versions;
@@ -370,7 +372,7 @@ final class DeployService
         }
 
         if ($runtime === 'python_static') {
-            $this->logProjectPortConfiguration($project, 'nohup');
+            $this->logProjectPortConfiguration($project, 'systemd');
             $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=%s path=%s port=%d',
                 (string) ($project['id'] ?? ''),
                 (string) ($project['project_name'] ?? $project['project_key'] ?? ''),
@@ -378,30 +380,21 @@ final class DeployService
                 $path,
                 $port
             );
-            $this->stdout[] = '[STEP] stop only this project port';
-            if (!$this->stopProjectPort($port)) {
-                return $this->fail('프로젝트 포트 종료 실패: ' . $port);
+            $this->stdout[] = '[STEP] stop project systemd service';
+            if (!$this->stopProjectService($project)) {
+                return $this->fail('프로젝트 systemd 서비스 종료 실패: ' . $this->projectSystemdUnit($project));
             }
-            $this->stdout[] = '[STEP] python_static start';
-            $startCommand = 'nohup ' . $this->projectEnvCommand(
-                'python3 -m http.server ' . escapeshellarg((string) $port) . ' --bind 0.0.0.0',
-                $path
-            ) . ' > app.log 2>&1 &';
-            $this->stdout[] = '[NOHUP_START] at=' . $this->now()
-                . ' cwd=' . $path
-                . ' expected_port=' . $port
-                . ' app_log=' . rtrim($path, '/') . '/app.log'
-                . ' command=' . $this->sanitizeCommandForLog($startCommand);
-            if (!$this->runShellCommand($startCommand, $path)) {
-                $this->stopProjectPort($port);
-                return $this->fail('python_static 서비스 시작 실패');
+            $this->stdout[] = '[STEP] python_static start via systemd';
+            if (!$this->startProjectService($project, 'python3 -m http.server ' . escapeshellarg((string) $port) . ' --bind 0.0.0.0')) {
+                $this->stopProjectService($project);
+                return $this->fail('python_static systemd 서비스 시작 실패');
             }
             if (!$this->waitForProjectPortListening(
                 $port,
                 self::DEFAULT_PORT_LISTEN_ATTEMPTS,
                 self::PORT_LISTEN_INTERVAL_SECONDS
             )) {
-                $this->stopProjectPort($port);
+                $this->stopProjectService($project);
                 return $this->fail('포트 LISTEN 확인 실패: ' . $port);
             }
             $this->stdout[] = '[DEPLOY_SUCCESS_MARK] port=' . $port;
@@ -433,7 +426,7 @@ final class DeployService
         $port = (int) $project['port'];
         $projectId = (int) ($project['id'] ?? 0);
         $projectKey = $this->safeProjectKey((string) ($project['project_key'] ?? ('project-' . $projectId)));
-        $startMode = 'nohup';
+        $startMode = 'systemd';
         $this->logProjectPortConfiguration($project, $startMode);
         $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=nextjs_bun start_mode=%s path=%s port=%d',
             (string) ($project['id'] ?? ''),
@@ -536,44 +529,44 @@ final class DeployService
             }
 
             $this->stdout[] = '[STEP] stop existing service';
-            if (!$this->stopProjectSupervisor($path) || !$this->releaseProjectPort($port)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '기존 서비스 종료 실패: port=' . $port);
+            if (!$this->stopProjectService($project)) {
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '기존 systemd 서비스 종료 실패: ' . $this->projectSystemdUnit($project));
             }
 
             $this->stdout[] = '[STEP] switch production commit';
             if (!$this->runCommand(['git', 'reset', '--hard', $targetCommit], $path)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '운영 프로젝트 git reset 실패');
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '운영 프로젝트 git reset 실패');
             }
 
             $this->stdout[] = '[STEP] install candidate build artifacts';
             if (!$this->installCandidateNext($path, $candidateNext, $rollbackNext)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '.next 교체 실패');
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '.next 교체 실패');
             }
             if (!$this->installCandidateNodeModules($path, $candidateNodeModules, $rollbackNodeModules)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'node_modules 교체 실패');
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'node_modules 교체 실패');
             }
 
             $this->stdout[] = '[STEP] start new service';
-            if (!$this->startNextjsService($path, $port)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '신규 서비스 시작 실패');
+            if (!$this->startNextjsService($project)) {
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '신규 systemd 서비스 시작 실패');
             }
 
             $this->stdout[] = '[STEP] verify port listener';
             if (!$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS, $previousPids)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '포트 LISTEN 확인 실패');
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, '포트 LISTEN 확인 실패');
             }
 
             $this->stdout[] = '[STEP] verify HTTP response';
             if (!$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'HTTP 응답 확인 실패');
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'HTTP 응답 확인 실패');
             }
-            if ($this->appLogHasAddressInUse($path)) {
-                return $this->rollbackNextjsDeployment($path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'app.log EADDRINUSE 확인');
+            if ($this->projectJournalHasAddressInUse($project)) {
+                return $this->rollbackNextjsDeployment($project, $path, $port, $previousCommit, $rollbackNext, $candidateNext, $rollbackNodeModules, $candidateNodeModules, $previousPids, 'journal EADDRINUSE 확인');
             }
 
             $this->cleanupOldNextjsRollbacks($path);
-            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=nextjs_bun start_mode=nohup port=' . $port . ' target_commit=' . $targetCommit;
-            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: runtime=nextjs_bun start_mode=nohup port=' . $port;
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=nextjs_bun start_mode=systemd port=' . $port . ' target_commit=' . $targetCommit;
+            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트 확인 완료: runtime=nextjs_bun start_mode=systemd port=' . $port;
             return true;
         } finally {
             $this->stdout[] = '[STEP] cleanup candidate worktree';
@@ -600,7 +593,7 @@ final class DeployService
         $port = (int) $project['port'];
         $projectId = (int) ($project['id'] ?? 0);
         $projectKey = $this->safeProjectKey((string) ($project['project_key'] ?? ('project-' . $projectId)));
-        $startMode = 'nohup';
+        $startMode = 'systemd';
         $this->logProjectPortConfiguration($project, $startMode);
         $this->stdout[] = sprintf('프로젝트 배포 시작: id=%s name=%s runtime=node_app start_mode=%s path=%s port=%d',
             (string) ($project['id'] ?? ''),
@@ -697,40 +690,40 @@ final class DeployService
             $candidateArtifacts = $this->prepareNodeCandidateArtifacts($path, $buildPath, $deployId);
 
             $this->stdout[] = '[STEP] stop existing service';
-            if (!$this->stopProjectSupervisor($path) || !$this->releaseProjectPort($port)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '기존 서비스 종료 실패: port=' . $port);
+            if (!$this->stopProjectService($project)) {
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '기존 systemd 서비스 종료 실패: ' . $this->projectSystemdUnit($project));
             }
 
             $this->stdout[] = '[STEP] switch production commit';
             if (!$this->runCommand(['git', 'reset', '--hard', $targetCommit], $path)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '운영 프로젝트 git reset 실패');
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '운영 프로젝트 git reset 실패');
             }
 
             $this->stdout[] = '[STEP] install candidate node_modules and artifacts';
             if (!$this->installCandidateNodeModules($path, $candidateNodeModules, $rollbackNodeModules)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'node_modules 교체 실패');
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'node_modules 교체 실패');
             }
             if (!$this->installNodeCandidateArtifacts($path, $candidateArtifacts, $rollbackArtifacts)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '빌드 산출물 교체 실패');
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '빌드 산출물 교체 실패');
             }
 
             $this->stdout[] = '[STEP] start new service';
-            if (!$this->startNodeAppService($path, $port)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '신규 서비스 시작 실패');
+            if (!$this->startNodeAppService($project)) {
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '신규 node_app systemd 서비스 시작 실패');
             }
             if (!$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS, $previousPids)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '포트 LISTEN 확인 실패');
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, '포트 LISTEN 확인 실패');
             }
             if (!$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'HTTP 응답 확인 실패');
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'HTTP 응답 확인 실패');
             }
-            if ($this->appLogHasAddressInUse($path)) {
-                return $this->rollbackNodeAppDeployment($path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'app.log EADDRINUSE 확인');
+            if ($this->projectJournalHasAddressInUse($project)) {
+                return $this->rollbackNodeAppDeployment($project, $path, $port, $previousCommit, $rollbackNodeModules, $candidateNodeModules, $candidateArtifacts, $rollbackArtifacts, $previousPids, 'journal EADDRINUSE 확인');
             }
 
             $this->cleanupOldNodeAppRollbacks($path);
-            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=node_app start_mode=nohup port=' . $port . ' target_commit=' . $targetCommit;
-            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트/HTTP 확인 완료: runtime=node_app start_mode=nohup port=' . $port;
+            $this->stdout[] = '[DEPLOY_SUCCESS_MARK] runtime=node_app start_mode=systemd port=' . $port . ' target_commit=' . $targetCommit;
+            $this->stdout[] = '[DONE] 프로젝트 서비스 시작 및 포트/HTTP 확인 완료: runtime=node_app start_mode=systemd port=' . $port;
             return true;
         } finally {
             $this->stdout[] = '[STEP] cleanup node_app candidate worktree';
@@ -952,26 +945,17 @@ final class DeployService
         return true;
     }
 
-    private function startNextjsService(string $path, int $port): bool
+    private function startNextjsService(array $project): bool
     {
-        $startCommand = $this->nextjsBunStartCommand($port, $path);
-        $this->stdout[] = '[NOHUP_START] at=' . $this->now()
-            . ' cwd=' . $path
-            . ' expected_port=' . $port
-            . ' app_log=' . rtrim($path, '/') . '/app.log'
-            . ' command=' . $this->sanitizeCommandForLog($startCommand);
-        if (!$this->runLoginShellCommand($startCommand, $path)) {
-            return false;
-        }
-        $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
-        return true;
+        $port = (int) $project['port'];
+        return $this->startProjectService($project, 'PORT=' . escapeshellarg((string) $port) . ' bun run start -H 0.0.0.0');
     }
 
-    private function rollbackNextjsDeployment(string $path, int $port, string $previousCommit, ?string $rollbackNext, ?string $candidateNext, ?string $rollbackNodeModules, ?string $candidateNodeModules, array $previousPids, string $reason): bool
+    private function rollbackNextjsDeployment(array $project, string $path, int $port, string $previousCommit, ?string $rollbackNext, ?string $candidateNext, ?string $rollbackNodeModules, ?string $candidateNodeModules, array $previousPids, string $reason): bool
     {
         $this->stderr[] = '[ROLLBACK] reason=' . $reason;
         $rollbackOk = true;
-        $this->releaseProjectPort($port, 10);
+        $this->stopProjectService($project);
         if ($rollbackNext !== null && (is_dir($rollbackNext) || is_link($rollbackNext))) {
             $this->stdout[] = '[ROLLBACK] restore previous .next';
             $currentNext = rtrim($path, '/') . '/.next';
@@ -1003,7 +987,7 @@ final class DeployService
             $rollbackOk = false;
         }
         $this->stdout[] = '[ROLLBACK] restart previous service';
-        if (!$this->startNextjsService($path, $port)
+        if (!$this->startNextjsService($project)
             || !$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)
             || !$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
             $rollbackOk = false;
@@ -1072,77 +1056,137 @@ final class DeployService
         }
     }
 
-    private function stopProjectPort(int $port): bool
+
+    private function startProjectService(array $project, string $startCommand): bool
     {
-        if ($port === self::AUTO_DEPLOY_PORT) {
-            $this->stderr[] = 'Auto Deploy 보호 포트 9090은 종료하지 않습니다.';
+        $instance = $this->projectSystemdInstance($project);
+        $unit = $this->projectSystemdUnit($project);
+        $env = $this->projectSystemdEnvironment($project, $startCommand);
+
+        $this->stdout[] = '[SYSTEMD_ENV_WRITE] unit=' . $unit . ' instance=' . $instance;
+        if (!$this->writeProjectSystemdEnvironment($instance, $env)) {
             return false;
         }
 
-        $this->stdout[] = '프로젝트 포트만 종료합니다: ' . $port;
-        return $this->runShellCommand('pids=$(lsof -ti tcp:' . $port . ' 2>/dev/null || true); if [ -n "$pids" ]; then kill $pids; fi', null);
+        $this->stdout[] = '[SYSTEMD_RESTART] at=' . $this->now()
+            . ' unit=' . $unit
+            . ' cwd=' . (string) $project['server_path']
+            . ' expected_port=' . (int) $project['port']
+            . ' journal="journalctl -u ' . $unit . '"'
+            . ' command=' . $this->sanitizeCommandForLog($startCommand);
+
+        if (!$this->projectSystemdControl('restart', $instance)) {
+            return false;
+        }
+
+        return $this->projectSystemdControl('is-active', $instance);
     }
 
-    private function releaseProjectPort(int $port, int $maxWaitSeconds = 30): bool
+    private function stopProjectService(array $project): bool
     {
-        if ($port === self::AUTO_DEPLOY_PORT) {
-            $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port . ' reason=auto_deploy_protected';
+        $instance = $this->projectSystemdInstance($project);
+        $unit = $this->projectSystemdUnit($project);
+        $this->stdout[] = '[SYSTEMD_STOP] unit=' . $unit;
+
+        $this->projectSystemdControl('stop', $instance, false);
+        $this->projectSystemdControl('reset-failed', $instance, false);
+
+        return true;
+    }
+
+    private function writeProjectSystemdEnvironment(string $instance, string $env): bool
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'auto-deploy-project-env-');
+        if ($tempFile === false) {
+            $this->stderr[] = '[SYSTEMD_ENV_FAILED] reason=tempnam_failed';
             return false;
         }
 
-        $this->stdout[] = '[PORT_RELEASE_START] port=' . $port . ' max_wait=' . $maxWaitSeconds . 's interval=1s';
-        $details = $this->portReadinessDetails($port);
-        $pids = $this->portPids($port);
-        if ($pids === [] && $this->isNumericPid($details['pid'] ?? null)) {
-            $pids = [(string) $details['pid']];
+        try {
+            if (file_put_contents($tempFile, $env) === false) {
+                $this->stderr[] = '[SYSTEMD_ENV_FAILED] reason=temp_write_failed file=' . $tempFile;
+                return false;
+            }
+
+            return $this->runShellCommand(
+                'sudo -n ' . escapeshellarg(self::PROJECT_SYSTEMD_CONTROL)
+                . ' write-env ' . escapeshellarg($instance)
+                . ' < ' . escapeshellarg($tempFile),
+                null
+            );
+        } finally {
+            @unlink($tempFile);
         }
-        if ($pids === []) {
-            if (!(bool) $details['ready']) {
-                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' already_free=yes detail=' . (string) $details['detail'];
-                return true;
-            }
+    }
 
-            $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
-                . ' reason=listen_without_pid'
-                . ' source=' . (string) $details['source']
-                . ' detail=' . (string) $details['detail'];
-            return false;
-        }
-
-        $this->terminatePids($pids, 'TERM');
-        $sigkillAttempt = max(1, (int) floor($maxWaitSeconds / 2));
-
-        for ($attempt = 1; $attempt <= $maxWaitSeconds; $attempt++) {
-            sleep(1);
-            $details = $this->portReadinessDetails($port);
-            $pids = $this->portPids($port);
-            if ($pids === [] && $this->isNumericPid($details['pid'] ?? null)) {
-                $pids = [(string) $details['pid']];
-            }
-            if ($pids === [] && !(bool) $details['ready']) {
-                $this->stdout[] = '[PORT_RELEASE_SUCCESS] port=' . $port . ' attempt=' . $attempt . ' detail=' . (string) $details['detail'];
-                return true;
-            }
-
-            $this->stdout[] = '[PORT_RELEASE_WAIT] port=' . $port
-                . ' attempt=' . $attempt . '/' . $maxWaitSeconds
-                . ' pids=' . ($pids === [] ? 'unknown' : implode(',', $pids))
-                . ' listen=' . ((bool) $details['ready'] ? 'yes' : 'no')
-                . ' detail=' . (string) $details['detail'];
-
-            if ($attempt === $sigkillAttempt && $pids !== []) {
-                $this->terminatePids($pids, 'KILL');
-            }
+    private function projectSystemdControl(string $action, string $instance, bool $strict = true): bool
+    {
+        $command = 'sudo -n ' . escapeshellarg(self::PROJECT_SYSTEMD_CONTROL)
+            . ' ' . escapeshellarg($action)
+            . ' ' . escapeshellarg($instance);
+        $ok = $this->runShellCommand($command, null);
+        if (!$ok && !$strict) {
+            $this->failureReason = null;
+            return true;
         }
 
-        $details = $this->portReadinessDetails($port);
-        $pids = $this->portPids($port);
-        $this->stderr[] = '[PORT_RELEASE_FAILED] port=' . $port
-            . ' pids=' . ($pids === [] ? 'none' : implode(',', $pids))
-            . ' listen=' . ((bool) $details['ready'] ? 'yes' : 'no')
-            . ' detail=' . (string) $details['detail'];
+        return $ok;
+    }
 
-        return false;
+    private function projectJournalHasAddressInUse(array $project): bool
+    {
+        $instance = $this->projectSystemdInstance($project);
+        $unit = $this->projectSystemdUnit($project);
+        $command = 'sudo -n ' . escapeshellarg(self::PROJECT_SYSTEMD_CONTROL)
+            . ' journal ' . escapeshellarg($instance)
+            . ' --since ' . escapeshellarg('-2 minutes')
+            . ' --no-pager -n 80 2>/dev/null';
+        $output = [];
+        $code = 0;
+        exec($command, $output, $code);
+        $content = implode("\n", $output);
+        $hasError = str_contains($content, 'EADDRINUSE') || str_contains(strtolower($content), 'address already in use');
+        $this->stdout[] = '[JOURNAL_CHECK] unit=' . $unit
+            . ' exit_code=' . $code
+            . ' eaddrinuse=' . ($hasError ? 'yes' : 'no');
+
+        return $hasError;
+    }
+
+    private function projectSystemdEnvironment(array $project, string $startCommand): string
+    {
+        $path = (string) $project['server_path'];
+        $port = (string) ((int) $project['port']);
+        $runtime = (string) $project['runtime_type'];
+        $projectKey = (string) ($project['project_key'] ?? ('project-' . (int) ($project['id'] ?? 0)));
+
+        return implode("\n", [
+            'PROJECT_KEY=' . $this->systemdEnvValue($projectKey),
+            'PROJECT_RUNTIME=' . $this->systemdEnvValue($runtime),
+            'PROJECT_PATH=' . $this->systemdEnvValue($path),
+            'PROJECT_PORT=' . $this->systemdEnvValue($port),
+            'PROJECT_HOST=' . $this->systemdEnvValue('0.0.0.0'),
+            'PROJECT_HOSTNAME=' . $this->systemdEnvValue('0.0.0.0'),
+            'PROJECT_START_COMMAND=' . $this->systemdEnvValue($startCommand),
+            '',
+        ]);
+    }
+
+    private function systemdEnvValue(string $value): string
+    {
+        return '"' . str_replace(['\\', '"', '$', '`'], ['\\\\', '\\"', '\\$', '\\`'], $value) . '"';
+    }
+
+    private function projectSystemdUnit(array $project): string
+    {
+        return self::PROJECT_SYSTEMD_UNIT_PREFIX . $this->projectSystemdInstance($project) . '.service';
+    }
+
+    private function projectSystemdInstance(array $project): string
+    {
+        $id = (int) ($project['id'] ?? 0);
+        $key = $this->safeProjectKey((string) ($project['project_key'] ?? ('project-' . $id)));
+        return $id . '-' . $key;
     }
 
     /**
@@ -1150,23 +1194,14 @@ final class DeployService
      */
     private function portPids(int $port): array
     {
-        $pids = [];
+        if ($port < 1 || $port > 65535) {
+            return [];
+        }
 
+        $pids = [];
         $lsofOutput = [];
         exec('lsof -nP -iTCP:' . $port . ' -sTCP:LISTEN -t 2>/dev/null', $lsofOutput);
         $pids = array_merge($pids, $this->numericPids($lsofOutput));
-
-        $ssOutput = [];
-        exec('ss -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $ssOutput);
-        foreach ($ssOutput as $line) {
-            $pids = array_merge($pids, $this->pidsFromSocketLine($line));
-        }
-
-        $netstatOutput = [];
-        exec('netstat -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $netstatOutput);
-        foreach ($netstatOutput as $line) {
-            $pids = array_merge($pids, $this->pidsFromSocketLine($line));
-        }
 
         return array_values(array_unique($this->numericPids($pids)));
     }
@@ -1186,24 +1221,6 @@ final class DeployService
     {
         return is_string($pid) && preg_match('/^\d+$/', $pid) === 1;
     }
-
-    /**
-     * @param array<int,string> $pids
-     */
-    private function terminatePids(array $pids, string $signal): void
-    {
-        $pids = array_values(array_filter($pids, static function (string $pid): bool {
-            return preg_match('/^\d+$/', $pid) === 1;
-        }));
-        if ($pids === []) {
-            return;
-        }
-
-        $signal = strtoupper($signal) === 'KILL' ? 'KILL' : 'TERM';
-        $this->stdout[] = '[PORT_RELEASE_KILL] signal=' . $signal . ' pid=' . implode(',', $pids);
-        exec('kill -s ' . $signal . ' ' . implode(' ', array_map('escapeshellarg', $pids)) . ' 2>/dev/null || true');
-    }
-
 
     private function nodePackageManager(string $path): string
     {
@@ -1337,26 +1354,12 @@ final class DeployService
         return true;
     }
 
-    private function startNodeAppService(string $path, int $port): bool
+    private function startNodeAppService(array $project): bool
     {
+        $path = (string) $project['server_path'];
+        $port = (int) $project['port'];
         $command = $this->nodeStartCommand($path, $port);
-        if ($command === null) {
-            return false;
-        }
-        $startCommand = $this->closeInheritedFileDescriptorsCommand()
-            . '; nohup '
-            . $this->projectEnvCommand($command, $path)
-            . ' > app.log 2>&1 < /dev/null &';
-        $this->stdout[] = '[NOHUP_START] at=' . $this->now()
-            . ' cwd=' . $path
-            . ' expected_port=' . $port
-            . ' app_log=' . rtrim($path, '/') . '/app.log'
-            . ' command=' . $this->sanitizeCommandForLog($startCommand);
-        if (!$this->runLoginShellCommand($startCommand, $path)) {
-            return false;
-        }
-        $this->stdout[] = '[APP_LOG] file=' . rtrim($path, '/') . '/app.log exists=' . (is_file(rtrim($path, '/') . '/app.log') ? 'yes' : 'no');
-        return true;
+        return $command !== null && $this->startProjectService($project, $command);
     }
 
     /**
@@ -1364,11 +1367,11 @@ final class DeployService
      * @param array<string,string> $rollbackArtifacts
      * @param array<int,string> $previousPids
      */
-    private function rollbackNodeAppDeployment(string $path, int $port, string $previousCommit, ?string $rollbackNodeModules, ?string $candidateNodeModules, array $candidateArtifacts, array $rollbackArtifacts, array $previousPids, string $reason): bool
+    private function rollbackNodeAppDeployment(array $project, string $path, int $port, string $previousCommit, ?string $rollbackNodeModules, ?string $candidateNodeModules, array $candidateArtifacts, array $rollbackArtifacts, array $previousPids, string $reason): bool
     {
         $this->stderr[] = '[ROLLBACK] reason=' . $reason;
         $rollbackOk = true;
-        $this->releaseProjectPort($port, 10);
+        $this->stopProjectService($project);
         foreach ($candidateArtifacts as $name => $candidate) {
             $current = rtrim($path, '/') . '/' . $name;
             if ((is_dir($current) || is_link($current)) && !$this->runShellCommand('rm -rf ' . escapeshellarg($current), null)) {
@@ -1396,7 +1399,7 @@ final class DeployService
         if (!$this->runCommand(['git', 'reset', '--hard', $previousCommit], $path)) {
             $rollbackOk = false;
         }
-        if (!$this->startNodeAppService($path, $port)
+        if (!$this->startNodeAppService($project)
             || !$this->waitForProjectPortListening($port, self::NEXTJS_BUN_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)
             || !$this->waitForHttpResponse($port, self::DEFAULT_PORT_LISTEN_ATTEMPTS, self::PORT_LISTEN_INTERVAL_SECONDS)) {
             $rollbackOk = false;
@@ -1420,59 +1423,6 @@ final class DeployService
     private function cleanupOldNodeAppRollbacks(string $path): void
     {
         $this->runShellCommand('find ' . escapeshellarg($path) . ' -maxdepth 1 -type d \( -name ' . escapeshellarg('node_modules.rollback-*') . ' -o -name ' . escapeshellarg('*.rollback-*') . ' \) -mmin +1440 -exec rm -rf {} + 2>/dev/null || true', null);
-    }
-
-    private function nextjsBunStartCommand(int $port, string $path): string
-    {
-        return $this->closeInheritedFileDescriptorsCommand()
-            . '; nohup '
-            . $this->projectEnvCommand('PORT=' . escapeshellarg((string) $port)
-                . ' bun run start -H 0.0.0.0', $path)
-            . ' > app.log 2>&1 < /dev/null &';
-    }
-
-    private function closeInheritedFileDescriptorsCommand(): string
-    {
-        return 'for fd_path in /proc/$$/fd/*; do '
-            . 'fd=${fd_path##*/}; '
-            . 'case "$fd" in 0|1|2|*[!0-9]*) continue ;; esac; '
-            . 'eval "exec ${fd}>&-" 2>/dev/null || true; '
-            . 'done';
-    }
-
-    private function supervisorPidFile(string $path): string
-    {
-        return rtrim($path, '/') . '/.autodeploy-supervisor.pid';
-    }
-
-    private function shellLogValue(string $value): string
-    {
-        return str_replace(['\\', '"', '$', '`'], ['\\\\', '\\"', '\\$', '\\`'], $value);
-    }
-
-    private function stopProjectSupervisor(string $path): bool
-    {
-        $pidFile = $this->supervisorPidFile($path);
-        if (!is_file($pidFile)) {
-            $this->stdout[] = '[SUPERVISOR_RELEASE] pid_file=' . $pidFile . ' exists=no';
-            return true;
-        }
-
-        $pid = trim((string) file_get_contents($pidFile));
-        if (!$this->isNumericPid($pid)) {
-            $this->stdout[] = '[SUPERVISOR_RELEASE] pid_file=' . $pidFile . ' pid=invalid';
-            @unlink($pidFile);
-            return true;
-        }
-
-        $this->stdout[] = '[SUPERVISOR_RELEASE] pid_file=' . $pidFile . ' pid=' . $pid;
-        $command = 'pid=' . escapeshellarg($pid)
-            . '; if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null || true; fi'
-            . '; for i in $(seq 1 10); do if ! kill -0 "$pid" 2>/dev/null; then break; fi; sleep 1; done'
-            . '; if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi'
-            . '; rm -f ' . escapeshellarg($pidFile);
-
-        return $this->runShellCommand($command, null);
     }
 
     private function projectEnvCommand(string $command, string $path): string
@@ -1534,21 +1484,6 @@ final class DeployService
         }
 
         return $value;
-    }
-
-    private function appLogHasAddressInUse(string $path): bool
-    {
-        $appLog = rtrim($path, '/') . '/app.log';
-        if (!is_file($appLog) || !is_readable($appLog)) {
-            $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=no eaddrinuse=unknown';
-            return false;
-        }
-
-        $content = file_get_contents($appLog);
-        $hasError = is_string($content) && str_contains($content, 'EADDRINUSE');
-        $this->stdout[] = '[APP_LOG_CHECK] file=' . $appLog . ' readable=yes eaddrinuse=' . ($hasError ? 'yes' : 'no');
-
-        return $hasError;
     }
 
     private function waitForHttpResponse(int $port, int $maxAttempts, int $intervalSeconds): bool
@@ -1734,7 +1669,7 @@ final class DeployService
 
         $ssOutput = [];
         $ssCode = 0;
-        exec('ss -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $ssOutput, $ssCode);
+        exec('ss -ltnp ' . escapeshellarg('sport = :' . $port) . ' 2>/dev/null', $ssOutput, $ssCode);
         $checks[] = 'ss_code=' . $ssCode . ' lines=' . count($ssOutput);
         if ($ssCode === 0 && $ssOutput !== []) {
             return [
@@ -1747,7 +1682,9 @@ final class DeployService
 
         $netstatOutput = [];
         $netstatCode = 0;
-        exec('netstat -ltnp 2>/dev/null | grep -E ' . escapeshellarg('(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]'), $netstatOutput, $netstatCode);
+        $allNetstatOutput = [];
+        exec('netstat -ltnp 2>/dev/null', $allNetstatOutput, $netstatCode);
+        $netstatOutput = array_values(array_filter($allNetstatOutput, static fn (string $line): bool => preg_match('/(^|[[:space:]])[^[:space:]]*:' . $port . '[[:space:]]/', $line) === 1));
         $checks[] = 'netstat_code=' . $netstatCode . ' lines=' . count($netstatOutput);
         if ($netstatCode === 0 && $netstatOutput !== []) {
             return [

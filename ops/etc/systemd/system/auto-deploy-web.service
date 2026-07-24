@@ -1,0 +1,18 @@
+[Unit]
+Description=Auto Deploy web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+WorkingDirectory=/srv/auto_deploy
+ExecStart=/usr/bin/php -S 0.0.0.0:9090 -t public
+Restart=always
+RestartSec=3
+KillMode=control-group
+SyslogIdentifier=auto-deploy-web
+
+[Install]
+WantedBy=multi-user.target

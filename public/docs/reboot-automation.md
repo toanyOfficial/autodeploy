@@ -14,8 +14,9 @@ set -Eeuo pipefail
 sudo install -d -m 0755 /usr/local/sbin
 sudo install -d -m 0755 /etc/systemd/system
 sudo install -d -m 0755 -o appuser -g appuser /var/log/auto_deploy
+sudo install -d -m 0755 -o appuser -g appuser /var/lib/auto_deploy
 sudo touch /var/log/auto_deploy/reboot-deploy.log
-sudo chown appuser:appuser /var/log/auto_deploy /var/log/auto_deploy/reboot-deploy.log
+sudo chown appuser:appuser /var/log/auto_deploy /var/log/auto_deploy/reboot-deploy.log /var/lib/auto_deploy
 sudo chmod 0755 /var/log/auto_deploy
 sudo chmod 0664 /var/log/auto_deploy/reboot-deploy.log
 
@@ -25,14 +26,17 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+STATE_DIR="/var/lib/auto_deploy"
+PENDING_FILE="${STATE_DIR}/reboot-restore.pending"
+LOCK_FILE="/run/auto_deploy_reboot_restore.lock"
 MAX_LOG_LINES=400
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
 touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
-chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" "${STATE_DIR}" 2>/dev/null || true
 
 compact_log() {
   if [ -f "${LOG_FILE}" ]; then
@@ -48,10 +52,19 @@ compact_log
 trap compact_log EXIT
 
 exec >> "${LOG_FILE}" 2>&1
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  echo "[$(date -Is)] 서버 재부팅 + 기본설정 자동화가 이미 실행 중이므로 중복 요청을 건너뜁니다."
+  exit 0
+fi
 
 echo "[$(date -Is)] 서버 재부팅 + 기본설정 자동화를 예약합니다."
 echo "[$(date -Is)] systemd daemon-reload를 실행합니다."
 systemctl daemon-reload
+
+echo "[$(date -Is)] post-reboot 1회 실행 마커를 기록합니다: ${PENDING_FILE}"
+date -Is > "${PENDING_FILE}"
+chmod 0644 "${PENDING_FILE}"
 
 echo "[$(date -Is)] ${POST_REBOOT_SERVICE}를 enable 합니다."
 systemctl enable "${POST_REBOOT_SERVICE}"
@@ -67,16 +80,20 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+STATE_DIR="/var/lib/auto_deploy"
+PENDING_FILE="${STATE_DIR}/reboot-restore.pending"
+LOCK_FILE="/run/dandorak_post_reboot.lock"
 MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
+AUTO_DEPLOY_WEB_SERVICE="auto-deploy-web.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
 touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
-chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" "${STATE_DIR}" 2>/dev/null || true
 
 compact_log() {
   if [ -f "${LOG_FILE}" ]; then
@@ -99,15 +116,31 @@ log() {
 
 cleanup() {
   local exit_code=$?
-  if [ "${exit_code}" -eq 0 ]; then
-    log "post-reboot 작업이 완료되어 ${POST_REBOOT_SERVICE}를 disable 합니다."
-    systemctl disable "${POST_REBOOT_SERVICE}" || true
-  else
-    log "post-reboot 작업이 실패했습니다. 원인 확인을 위해 ${POST_REBOOT_SERVICE} enable 상태를 유지합니다. exit_code=${exit_code}"
-  fi
+  log "post-reboot 작업 종료 처리: ${POST_REBOOT_SERVICE} disable/reset-failed를 실행합니다. exit_code=${exit_code}"
+  systemctl disable "${POST_REBOOT_SERVICE}" || true
+  systemctl reset-failed "${POST_REBOOT_SERVICE}" || true
   compact_log
 }
 trap cleanup EXIT
+
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  log "post-reboot 작업이 이미 실행 중이므로 중복 실행을 건너뜁니다."
+  exit 0
+fi
+
+if [ ! -f "${PENDING_FILE}" ]; then
+  log "post-reboot 1회 실행 마커가 없어 작업을 건너뜁니다: ${PENDING_FILE}"
+  exit 0
+fi
+
+marker_created_at="$(cat "${PENDING_FILE}" 2>/dev/null || true)"
+rm -f "${PENDING_FILE}"
+log "post-reboot 1회 실행 마커를 소비했습니다. marker_created_at=${marker_created_at}"
+
+log "반복 실행 방지를 위해 본 작업 시작 시점에 ${POST_REBOOT_SERVICE}를 disable 합니다."
+systemctl disable "${POST_REBOOT_SERVICE}" || true
+systemctl reset-failed "${POST_REBOOT_SERVICE}" || true
 
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
@@ -139,15 +172,9 @@ git reset --hard origin/main
 if [ -d .next ]; then rm -rf .next; fi
 "
 
-log "Auto Deploy 9090 포트를 해제합니다."
-fuser -k 9090/tcp 2>/dev/null || true
-sleep 1
-
-log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc "
-cd '${AUTO_DEPLOY_DIR}'
-nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-"
+log "Auto Deploy web systemd 서비스를 재시작합니다."
+systemctl daemon-reload
+systemctl restart "${AUTO_DEPLOY_WEB_SERVICE}"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
@@ -189,6 +216,7 @@ sudo tee /etc/systemd/system/dandorak-post-reboot.service >/dev/null <<'EOF'
 Description=Dandorak post-reboot Auto Deploy restore
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/var/lib/auto_deploy/reboot-restore.pending
 
 [Service]
 Type=oneshot
@@ -220,14 +248,17 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+STATE_DIR="/var/lib/auto_deploy"
+PENDING_FILE="${STATE_DIR}/reboot-restore.pending"
+LOCK_FILE="/run/auto_deploy_reboot_restore.lock"
 MAX_LOG_LINES=400
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
 touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
-chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" "${STATE_DIR}" 2>/dev/null || true
 
 compact_log() {
   if [ -f "${LOG_FILE}" ]; then
@@ -243,10 +274,19 @@ compact_log
 trap compact_log EXIT
 
 exec >> "${LOG_FILE}" 2>&1
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  echo "[$(date -Is)] 서버 재부팅 + 기본설정 자동화가 이미 실행 중이므로 중복 요청을 건너뜁니다."
+  exit 0
+fi
 
 echo "[$(date -Is)] 서버 재부팅 + 기본설정 자동화를 예약합니다."
 echo "[$(date -Is)] systemd daemon-reload를 실행합니다."
 systemctl daemon-reload
+
+echo "[$(date -Is)] post-reboot 1회 실행 마커를 기록합니다: ${PENDING_FILE}"
+date -Is > "${PENDING_FILE}"
+chmod 0644 "${PENDING_FILE}"
 
 echo "[$(date -Is)] ${POST_REBOOT_SERVICE}를 enable 합니다."
 systemctl enable "${POST_REBOOT_SERVICE}"
@@ -263,16 +303,20 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+STATE_DIR="/var/lib/auto_deploy"
+PENDING_FILE="${STATE_DIR}/reboot-restore.pending"
+LOCK_FILE="/run/dandorak_post_reboot.lock"
 MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
+AUTO_DEPLOY_WEB_SERVICE="auto-deploy-web.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
 touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
-chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" "${STATE_DIR}" 2>/dev/null || true
 
 compact_log() {
   if [ -f "${LOG_FILE}" ]; then
@@ -295,15 +339,31 @@ log() {
 
 cleanup() {
   local exit_code=$?
-  if [ "${exit_code}" -eq 0 ]; then
-    log "post-reboot 작업이 완료되어 ${POST_REBOOT_SERVICE}를 disable 합니다."
-    systemctl disable "${POST_REBOOT_SERVICE}" || true
-  else
-    log "post-reboot 작업이 실패했습니다. 원인 확인을 위해 ${POST_REBOOT_SERVICE} enable 상태를 유지합니다. exit_code=${exit_code}"
-  fi
+  log "post-reboot 작업 종료 처리: ${POST_REBOOT_SERVICE} disable/reset-failed를 실행합니다. exit_code=${exit_code}"
+  systemctl disable "${POST_REBOOT_SERVICE}" || true
+  systemctl reset-failed "${POST_REBOOT_SERVICE}" || true
   compact_log
 }
 trap cleanup EXIT
+
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  log "post-reboot 작업이 이미 실행 중이므로 중복 실행을 건너뜁니다."
+  exit 0
+fi
+
+if [ ! -f "${PENDING_FILE}" ]; then
+  log "post-reboot 1회 실행 마커가 없어 작업을 건너뜁니다: ${PENDING_FILE}"
+  exit 0
+fi
+
+marker_created_at="$(cat "${PENDING_FILE}" 2>/dev/null || true)"
+rm -f "${PENDING_FILE}"
+log "post-reboot 1회 실행 마커를 소비했습니다. marker_created_at=${marker_created_at}"
+
+log "반복 실행 방지를 위해 본 작업 시작 시점에 ${POST_REBOOT_SERVICE}를 disable 합니다."
+systemctl disable "${POST_REBOOT_SERVICE}" || true
+systemctl reset-failed "${POST_REBOOT_SERVICE}" || true
 
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
@@ -335,15 +395,9 @@ git reset --hard origin/main
 if [ -d .next ]; then rm -rf .next; fi
 "
 
-log "Auto Deploy 9090 포트를 해제합니다."
-fuser -k 9090/tcp 2>/dev/null || true
-sleep 1
-
-log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc "
-cd '${AUTO_DEPLOY_DIR}'
-nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-"
+log "Auto Deploy web systemd 서비스를 재시작합니다."
+systemctl daemon-reload
+systemctl restart "${AUTO_DEPLOY_WEB_SERVICE}"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
@@ -386,6 +440,7 @@ log "서버 재부팅 + 기본설정 + 전체 안정화버전 자동배포 작�
 Description=Dandorak post-reboot Auto Deploy restore
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/var/lib/auto_deploy/reboot-restore.pending
 
 [Service]
 Type=oneshot
@@ -397,7 +452,60 @@ KillMode=process
 WantedBy=multi-user.target
 ```
 
-### 2.4 sudoers
+
+### 2.4 `/etc/systemd/system/auto-deploy-web.service`
+
+```ini
+[Unit]
+Description=Auto Deploy web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+WorkingDirectory=/srv/auto_deploy
+ExecStart=/usr/bin/php -S 0.0.0.0:9090 -t public
+Restart=always
+RestartSec=3
+KillMode=control-group
+SyslogIdentifier=auto-deploy-web
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 2.5 `/etc/systemd/system/auto-deploy-project@.service`
+
+```ini
+[Unit]
+Description=Auto Deploy managed project %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+EnvironmentFile=/etc/auto_deploy/projects/%i.env
+ExecStart=/usr/local/bin/auto-deploy-project-runner %i
+WorkingDirectory=/
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=30
+SyslogIdentifier=auto-deploy-project-%i
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 2.6 project runner/control/sudoers
+
+프로젝트별 장기 실행 명령은 DeployService가 `/etc/auto_deploy/projects/{id}-{project_key}.env`에 기록하고 `auto-deploy-project-control` wrapper를 통해 `systemctl`로만 제어합니다. 로그는 `journalctl -u auto-deploy-project@{id}-{project_key}.service`로 확인합니다.
+
+### 2.7 sudoers
 
 `/etc/sudoers.d/auto-reboot-deploy`:
 
@@ -413,7 +521,13 @@ appuser ALL=(root) NOPASSWD: /usr/local/sbin/auto-reboot-deploy.sh
 test -x /usr/local/sbin/auto-reboot-deploy.sh
 test -x /usr/local/sbin/dandorak-post-reboot.sh
 test -f /etc/systemd/system/dandorak-post-reboot.service
+test -f /etc/systemd/system/auto-deploy-web.service
+test -f /etc/systemd/system/auto-deploy-project@.service
+test -x /usr/local/sbin/auto-deploy-web-control
+test -x /usr/local/sbin/auto-deploy-project-control
+test -x /usr/local/bin/auto-deploy-project-runner
 test -d /var/log/auto_deploy
+test -d /var/lib/auto_deploy
 test -f /var/log/auto_deploy/reboot-deploy.log
 sudo visudo -cf /etc/sudoers.d/auto-reboot-deploy
 sudo -u appuser -H sudo -n -l /usr/local/sbin/auto-reboot-deploy.sh
@@ -434,14 +548,14 @@ sudo systemctl daemon-reload
 6. 부팅 후 `/usr/local/sbin/dandorak-post-reboot.sh` 실행
 7. `/srv/dandorak/start-database.sh` 실행
 8. DB Ready Check: 최대 120초 동안 2초 간격으로 Auto Deploy `.env`를 로드한 PHP PDO `SELECT 1` 연결 테스트 재시도
-9. Auto Deploy를 appuser 권한으로 실행
+9. `auto-deploy-web.service`를 systemd로 restart
 10. `php scripts/deploy_all_stable.php` 실행
 11. 내부 PHP 코드가 `DeployService::deployStable()`을 활성 프로젝트별로 순차 호출
 12. Caddy validate
 13. Caddy reload
-14. `dandorak-post-reboot.service` disable
+14. `dandorak-post-reboot.service` disable/reset-failed
 
-post-reboot script에는 프로젝트별 `git pull`, `npm ci`, `npm run build`, `pm2 restart` 명령을 작성하지 않습니다. 프로젝트별 배포는 Auto Deploy 내부 `DeployService::deployStable()`만 재사용합니다.
+post-reboot script에는 프로젝트별 `git pull`, `npm ci`, `npm run build`, `pm2 restart` 명령을 작성하지 않습니다. 장기 실행되는 Auto Deploy web과 프로젝트 서버 프로세스는 각각 `auto-deploy-web.service`, `auto-deploy-project@.service` cgroup에서 실행됩니다. 프로젝트별 배포는 Auto Deploy 내부 `DeployService::deployStable()`만 재사용합니다.
 
 ## 5. 로그 확인
 

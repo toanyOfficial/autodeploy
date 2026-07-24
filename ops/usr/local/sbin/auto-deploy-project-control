@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+action="${1:-}"
+instance="${2:-}"
+
+if [[ ! "${instance}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  echo "invalid project systemd instance: ${instance}" >&2
+  exit 2
+fi
+
+unit="auto-deploy-project@${instance}.service"
+env_dir="/etc/auto_deploy/projects"
+env_file="${env_dir}/${instance}.env"
+
+case "${action}" in
+  write-env)
+    install -d -m 0755 -o root -g root "${env_dir}"
+    tmp="$(mktemp)"
+    cat > "${tmp}"
+    install -m 0644 -o root -g root "${tmp}" "${env_file}"
+    rm -f "${tmp}"
+    systemctl daemon-reload
+    ;;
+  start|stop|restart|status|is-active|reset-failed)
+    systemctl "${action}" "${unit}"
+    ;;
+  enable|disable)
+    systemctl "${action}" "${unit}"
+    ;;
+  journal)
+    shift 2
+    journalctl -u "${unit}" "$@"
+    ;;
+  *)
+    echo "Usage: auto-deploy-project-control {write-env|start|stop|restart|status|is-active|reset-failed|enable|disable|journal} <instance> [journal args...]" >&2
+    exit 2
+    ;;
+esac
