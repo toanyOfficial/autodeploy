@@ -197,18 +197,7 @@ final class ApiController
             return;
         }
 
-        $root = dirname(__DIR__, 2);
-        $port = (int) (Env::get('PORT', '9090') ?? '9090');
-        if ($port < 1 || $port > 65535) {
-            Response::json([
-                'success' => false,
-                'message' => 'Auto Deploy 포트 설정이 올바르지 않아 self reboot를 시작할 수 없습니다.',
-            ], 500);
-            return;
-        }
-
-        $phpBinary = PHP_BINARY ?: 'php';
-        $logFile = sys_get_temp_dir() . '/auto_deploy_self_reboot.log';
+        $logFile = '/var/log/auto_deploy/reboot-deploy.log';
         $scriptFile = tempnam(sys_get_temp_dir(), 'auto-deploy-self-reboot-');
         if ($scriptFile === false) {
             Response::json([
@@ -218,17 +207,7 @@ final class ApiController
             return;
         }
 
-        $pidFile = $root . '/.autodeploy.pid';
-        if (file_put_contents($pidFile, (string) getmypid()) === false) {
-            @unlink($scriptFile);
-            Response::json([
-                'success' => false,
-                'message' => 'Auto Deploy PID 파일을 저장할 수 없어 self reboot를 시작할 수 없습니다.',
-            ], 500);
-            return;
-        }
-
-        $restartScript = $this->selfRebootScript($root, $port, $phpBinary, $logFile, $scriptFile, $pidFile);
+        $restartScript = $this->selfRebootScript($scriptFile);
         if (file_put_contents($scriptFile, $restartScript) === false || !chmod($scriptFile, 0700)) {
             @unlink($scriptFile);
             Response::json([
@@ -273,8 +252,7 @@ final class ApiController
 
             Response::json([
                 'success' => true,
-                'message' => 'Auto Deploy self reboot를 예약했습니다. Auto Deploy 리스너만 안전하게 재시작하므로 잠시 뒤 페이지를 새로고침해 주세요.',
-                'port' => $port,
+                'message' => 'Auto Deploy self reboot를 예약했습니다. 저장소 갱신, 운영 파일 설치, 웹 재시작, 전체 안정화버전 재배포가 독립 systemd 작업으로 계속됩니다.',
                 'log_file' => $logFile,
             ]);
         } catch (\Throwable $exception) {
@@ -296,69 +274,20 @@ final class ApiController
             . 'done';
     }
 
-    private function selfRebootScript(string $root, int $port, string $phpBinary, string $logFile, string $scriptFile, string $pidFile): string
+    private function selfRebootScript(string $scriptFile): string
     {
         return implode("\n", [
             '#!/usr/bin/env bash',
             'set -Eeuo pipefail',
-            'log_file=' . escapeshellarg($logFile),
             'script_file=' . escapeshellarg($scriptFile),
-            'root_dir=' . escapeshellarg($root),
-            'port=' . escapeshellarg((string) $port),
-            'php_binary=' . escapeshellarg($phpBinary),
-            'pid_file=' . escapeshellarg($pidFile),
-            'close_inherited_file_descriptors() {',
-            '  local fd_path fd',
-            '  for fd_path in /proc/$$/fd/*; do',
-            '    fd=${fd_path##*/}',
-            '    case "$fd" in 0|1|2|*[!0-9]*) continue ;; esac',
-            '    eval "exec ${fd}>&-" 2>/dev/null || true',
-            '  done',
-            '}',
-            'close_inherited_file_descriptors',
-            'log() { echo "[$(date -Is)] $*"; }',
             'cleanup() { rm -f "$script_file"; }',
-            '# Self reboot must only stop the Auto Deploy process recorded in its pidfile.',
-            '# Do not discover or kill by port: child projects may temporarily inherit descriptors from older versions.',
-            'release_auto_deploy_listener() {',
-            '  local pid',
-            '  if [ ! -f "${pid_file}" ]; then log "pidfile missing: ${pid_file}"; return 1; fi',
-            '  pid="$(cat "${pid_file}" 2>/dev/null | tr -cd "0-9")"',
-            '  if [ -z "${pid}" ]; then log "pidfile has no valid pid: ${pid_file}"; return 1; fi',
-            '  log "terminate Auto Deploy pidfile pid: ${pid}"',
-            '  kill "${pid}" 2>/dev/null || true',
-            '  for attempt in $(seq 1 15); do',
-            '    if ! kill -0 "${pid}" 2>/dev/null; then return 0; fi',
-            '    sleep 1',
-            '  done',
-            '  log "force terminate Auto Deploy pidfile pid: ${pid}"',
-            '  kill -9 "${pid}" 2>/dev/null || true',
-            '}',
             'trap cleanup EXIT',
             'sleep 2',
-            'log "self reboot start root=${root_dir} port=${port}"',
-            'cd "$root_dir"',
-            'log "git fetch --all"',
-            'git fetch --all',
-            'log "git reset --hard origin/main"',
-            'git reset --hard origin/main',
-            'if [ -d .next ]; then log "rm -rf .next"; rm -rf .next; fi',
-            'log "release Auto Deploy listener by pidfile ${pid_file}"',
-            'release_auto_deploy_listener',
-            'log "start php built-in server"',
-            'nohup "$php_binary" -S "0.0.0.0:${port}" -t public > app.log 2>&1 < /dev/null &',
-            'server_pid=$!',
-            'echo "${server_pid}" > "${pid_file}"',
-            'log "started pid=${server_pid}"',
-            'for attempt in $(seq 1 30); do',
-            '  if curl -fsS --max-time 2 "http://127.0.0.1:${port}/login" >/dev/null 2>&1; then log "ready attempt=${attempt}"; exit 0; fi',
-            '  sleep 1',
-            'done',
-            'log "ready check failed"',
-            'exit 1',
+            'exec sudo -n /usr/local/sbin/auto-reboot-deploy.sh self-reboot',
             '',
         ]);
     }
+
 
     public function rebootAndRestore(Request $request): void
     {

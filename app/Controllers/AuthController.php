@@ -6,6 +6,7 @@ use App\Config\Env;
 use App\Core\Request;
 use App\Core\Response;
 use App\Security\AdminPassword;
+use App\Services\AppVersionService;
 
 final class AuthController
 {
@@ -16,7 +17,10 @@ final class AuthController
             return;
         }
 
-        Response::view('auth/login', ['error' => $_SESSION['login_error'] ?? null]);
+        Response::view('auth/login', [
+            'error' => $_SESSION['login_error'] ?? null,
+            'appCommitHash' => (new AppVersionService())->currentCommitHash(),
+        ]);
         unset($_SESSION['login_error']);
     }
 
