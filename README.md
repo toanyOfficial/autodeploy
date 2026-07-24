@@ -71,6 +71,7 @@ python3 scripts/check_deployservice_methods.py
 sudo install -m 0755 ops/usr/local/sbin/auto-reboot-deploy.sh /usr/local/sbin/auto-reboot-deploy.sh
 sudo install -m 0755 ops/usr/local/sbin/dandorak-post-reboot.sh /usr/local/sbin/dandorak-post-reboot.sh
 sudo install -d -m 0755 -o appuser -g appuser /var/log/auto_deploy
+sudo install -d -m 0755 -o appuser -g appuser /var/lib/auto_deploy
 sudo touch /var/log/auto_deploy/reboot-deploy.log
 sudo chown appuser:appuser /var/log/auto_deploy/reboot-deploy.log
 sudo chmod 0664 /var/log/auto_deploy/reboot-deploy.log
@@ -78,6 +79,8 @@ sudo install -m 0644 ops/etc/systemd/system/dandorak-post-reboot.service /etc/sy
 sudo install -m 0440 ops/sudoers.d/auto-reboot-deploy /etc/sudoers.d/auto-reboot-deploy
 sudo systemctl daemon-reload
 ```
+
+`auto-reboot-deploy.sh`는 `/var/lib/auto_deploy/reboot-restore.pending` 1회 실행 마커를 만든 뒤 서비스를 enable 하며, 두 운영 스크립트는 `flock`으로 중복 실행을 차단합니다. `dandorak-post-reboot.sh`는 시작 즉시 마커를 소비하고 서비스를 disable/reset-failed 하므로, 실제 재부팅 없는 재시작이나 반복 start 루프에서는 전체 배포를 다시 실행하지 않습니다.
 
 `dandorak-post-reboot.sh`는 프로젝트별 배포 명령을 직접 실행하지 않고, appuser 권한으로 `php scripts/deploy_all_stable.php`를 호출합니다. 해당 CLI는 `StableDeploymentBatchService`를 통해 활성 프로젝트 목록을 조회하고 각 프로젝트에 대해 `DeployService::deployStable()`을 순차 호출합니다.
 

@@ -2,6 +2,7 @@
 Description=Dandorak post-reboot Auto Deploy restore
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/var/lib/auto_deploy/reboot-restore.pending
 
 [Service]
 Type=oneshot
