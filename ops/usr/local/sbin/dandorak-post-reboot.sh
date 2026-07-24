@@ -3,16 +3,19 @@ set -Eeuo pipefail
 
 LOG_DIR="/var/log/auto_deploy"
 LOG_FILE="${LOG_DIR}/reboot-deploy.log"
+STATE_DIR="/var/lib/auto_deploy"
+PENDING_FILE="${STATE_DIR}/reboot-restore.pending"
+LOCK_FILE="/run/dandorak_post_reboot.lock"
 MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
 touch "${LOG_FILE}"
 chmod 0755 "${LOG_DIR}"
 chmod 0664 "${LOG_FILE}"
-chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+chown appuser:appuser "${LOG_DIR}" "${LOG_FILE}" "${STATE_DIR}" 2>/dev/null || true
 
 compact_log() {
   if [ -f "${LOG_FILE}" ]; then
@@ -34,15 +37,31 @@ log() {
 
 cleanup() {
   local exit_code=$?
-  if [ "${exit_code}" -eq 0 ]; then
-    log "post-reboot 작업이 완료되어 ${POST_REBOOT_SERVICE}를 disable 합니다."
-    systemctl disable "${POST_REBOOT_SERVICE}" || true
-  else
-    log "post-reboot 작업이 실패했습니다. 원인 확인을 위해 ${POST_REBOOT_SERVICE} enable 상태를 유지합니다. exit_code=${exit_code}"
-  fi
+  log "post-reboot 작업 종료 처리: ${POST_REBOOT_SERVICE} disable/reset-failed를 실행합니다. exit_code=${exit_code}"
+  systemctl disable "${POST_REBOOT_SERVICE}" || true
+  systemctl reset-failed "${POST_REBOOT_SERVICE}" || true
   compact_log
 }
 trap cleanup EXIT
+
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  log "post-reboot 작업이 이미 실행 중이므로 중복 실행을 건너뜁니다."
+  exit 0
+fi
+
+if [ ! -f "${PENDING_FILE}" ]; then
+  log "post-reboot 1회 실행 마커가 없어 작업을 건너뜁니다: ${PENDING_FILE}"
+  exit 0
+fi
+
+marker_created_at="$(cat "${PENDING_FILE}" 2>/dev/null || true)"
+rm -f "${PENDING_FILE}"
+log "post-reboot 1회 실행 마커를 소비했습니다. marker_created_at=${marker_created_at}"
+
+log "반복 실행 방지를 위해 본 작업 시작 시점에 ${POST_REBOOT_SERVICE}를 disable 합니다."
+systemctl disable "${POST_REBOOT_SERVICE}" || true
+systemctl reset-failed "${POST_REBOOT_SERVICE}" || true
 
 log "DB 시작 스크립트를 실행합니다."
 /srv/dandorak/start-database.sh
