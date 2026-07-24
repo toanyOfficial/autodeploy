@@ -63,7 +63,7 @@ python3 scripts/check_deployservice_methods.py
 
 ## 서버 재부팅 + 기본설정 + 전체 안정화버전 자동배포
 
-관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼이 있습니다. 이 버튼은 `POST /api/system/reboot-and-restore`만 호출하며, 서버에서 고정 명령인 `sudo /usr/local/sbin/auto-reboot-deploy.sh`만 실행합니다. `self reboot` 버튼은 fd 3 이상을 닫은 상태로 임시 detached 스크립트를 생성해 `/srv/auto_deploy`를 `origin/main`으로 갱신하고, 필요 시 `.next`를 삭제한 뒤 포트 기준 kill 없이 `.autodeploy.pid`에 기록된 Auto Deploy PHP PID만 종료하고 PHP 내장 서버를 다시 기동합니다.
+관리자 화면의 개발자 설정에는 `서버 재부팅 + 기본설정` 버튼과 `self reboot` 버튼이 있습니다. 서버 재부팅 버튼은 `sudo /usr/local/sbin/auto-reboot-deploy.sh`를 실행해 실제 reboot 이후 `dandorak-post-reboot.service`가 후속 작업을 수행하게 하고, `self reboot` 버튼은 `sudo /usr/local/sbin/auto-reboot-deploy.sh self-reboot`를 detached로 호출해 실제 서버 재부팅 없이 동일한 post-reboot 작업을 systemd oneshot에서 독립 실행합니다. 두 경로 모두 `/srv/auto_deploy`를 appuser 권한으로 최신 `origin/main`에 동기화한 뒤 최신 `ops` 파일을 운영 경로에 설치하고, `systemctl daemon-reload`, Auto Deploy 웹 재시작, wrapper 권한 검증, 전체 활성 프로젝트 안정화버전 재배포까지 완료해야 성공입니다.
 
 운영 서버 반영 시에는 저장소의 템플릿 파일을 아래 위치로 배치합니다. 전체 복붙 설치 가이드는 `docs/reboot-automation.md`를 확인합니다.
 
@@ -87,7 +87,7 @@ sudo install -m 0440 ops/sudoers.d/auto-deploy-web-systemd /etc/sudoers.d/auto-d
 sudo systemctl daemon-reload
 ```
 
-`auto-reboot-deploy.sh`는 `/var/lib/auto_deploy/reboot-restore.pending` 1회 실행 마커를 만든 뒤 서비스를 enable 하며, 두 운영 스크립트는 `flock`으로 중복 실행을 차단합니다. 프로젝트 프로세스는 `auto-deploy-project@.service` 아래에 남으므로 post-reboot oneshot cgroup에 장기 실행 프로세스가 남지 않습니다. `dandorak-post-reboot.sh`는 시작 즉시 마커를 소비하고 서비스를 disable/reset-failed 하므로, 실제 재부팅 없는 재시작이나 반복 start 루프에서는 전체 배포를 다시 실행하지 않습니다.
+`auto-reboot-deploy.sh`는 `/var/lib/auto_deploy/reboot-restore.pending` 1회 실행 마커를 만든 뒤 서비스를 enable 하며, `self-reboot` 모드에서는 reboot 대신 즉시 `dandorak-post-reboot.service`를 start합니다. 프로젝트 프로세스는 `auto-deploy-project@.service` 아래에 남으므로 post-reboot oneshot cgroup에 장기 실행 프로세스가 남지 않습니다. `dandorak-post-reboot.sh`는 시작 즉시 마커를 소비하고 서비스를 disable/reset-failed 하므로, 실제 재부팅 없는 재시작이나 반복 start 루프에서는 전체 배포를 다시 실행하지 않습니다.
 
 `dandorak-post-reboot.sh`는 프로젝트별 배포 명령을 직접 실행하지 않고, appuser 권한으로 `php scripts/deploy_all_stable.php`를 호출합니다. 해당 CLI는 `StableDeploymentBatchService`를 통해 활성 프로젝트 목록을 조회하고 각 프로젝트에 대해 `DeployService::deployStable()`을 순차 호출합니다.
 

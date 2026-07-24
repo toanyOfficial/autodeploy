@@ -35,16 +35,28 @@ if ! flock -n 9; then
   exit 0
 fi
 
-echo "[$(date -Is)] 서버 재부팅 + 기본설정 자동화를 예약합니다."
+mode="${1:-reboot}"
+if [ "${mode}" != "reboot" ] && [ "${mode}" != "self-reboot" ]; then
+  echo "[$(date -Is)] 지원하지 않는 실행 모드입니다: ${mode}"
+  exit 2
+fi
+
+echo "[$(date -Is)] 서버 재부팅 + 기본설정 자동화를 예약합니다. mode=${mode}"
 echo "[$(date -Is)] systemd daemon-reload를 실행합니다."
 systemctl daemon-reload
 
 echo "[$(date -Is)] post-reboot 1회 실행 마커를 기록합니다: ${PENDING_FILE}"
-date -Is > "${PENDING_FILE}"
+printf "%s mode=%s\n" "$(date -Is)" "${mode}" > "${PENDING_FILE}"
 chmod 0644 "${PENDING_FILE}"
 
 echo "[$(date -Is)] ${POST_REBOOT_SERVICE}를 enable 합니다."
 systemctl enable "${POST_REBOOT_SERVICE}"
+
+if [ "${mode}" = "self-reboot" ]; then
+  echo "[$(date -Is)] self-reboot 모드이므로 서버 재부팅 없이 ${POST_REBOOT_SERVICE}를 start 합니다."
+  systemctl start "${POST_REBOOT_SERVICE}"
+  exit 0
+fi
 
 echo "[$(date -Is)] 서버를 재부팅합니다."
 systemctl reboot

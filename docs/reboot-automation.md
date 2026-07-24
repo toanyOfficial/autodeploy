@@ -538,6 +538,22 @@ sudo systemctl daemon-reload
 
 관리자 화면의 `설치 상태 다시 확인` 버튼에서도 동일한 필수 항목을 확인할 수 있습니다. sudoers 파일은 root:root 0440 권한을 유지하며, 화면은 `/etc/sudoers.d` 파일 직접 조회가 아니라 위 `sudo -n ... check-permission` 명령의 성공 여부로 권한을 판단합니다.
 
+
+### Self Reboot 운영 반영 순서
+
+Self Reboot는 사용자의 추가 수동 명령 없이 아래 순서를 완료해야 성공입니다.
+
+1. DB 및 필수 기반 서비스 기동 확인
+2. `/srv/auto_deploy` 저장소를 appuser 권한으로 `origin/main`에 동기화
+3. 최신 저장소의 `ops` 실행 파일, systemd unit, sudoers 파일을 운영 경로에 재설치
+4. `systemctl daemon-reload` 실행
+5. `auto-deploy-web-control restart`로 Auto Deploy 웹 service 재시작
+6. `sudo -u appuser -H sudo -n /usr/local/sbin/auto-deploy-project-control check-permission` 및 `sudo -u appuser -H sudo -n /usr/local/sbin/auto-deploy-web-control check-permission` 검증
+7. 전체 활성 프로젝트 안정화버전 배포
+8. 프로젝트별 `auto-deploy-project@{id}-{project_key}.service` 상태와 최종 배포 결과 검증
+
+저장소 동기화, 운영 파일 설치, wrapper 검증 중 하나라도 실패하면 전체 프로젝트 재배포를 시작하지 않고 실패 단계와 stderr를 `/var/log/auto_deploy/reboot-deploy.log`에 남깁니다. Auto Deploy 웹 재시작은 post-reboot systemd oneshot 내부에서 실행되므로, 웹 요청 프로세스가 종료되어도 후속 작업은 계속됩니다.
+
 ## 4. 동작 흐름
 
 설치가 완료된 서버에서만 다음 순서로 동작합니다.
