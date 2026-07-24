@@ -12,6 +12,7 @@
             <p class="eyebrow">Auto Deploy</p>
             <h1>공주님 배포실 입장하기</h1>
             <p class="login-copy">안전한 배포를 위해 먼저 반짝이는 열쇠를 확인할게요.</p>
+            <p class="muted app-revision">현재 실행 커밋: <code><?= htmlspecialchars($appCommitHash ?? 'unknown', ENT_QUOTES, 'UTF-8') ?></code></p>
 
             <?php if (!empty($error)): ?>
                 <div class="alert" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>

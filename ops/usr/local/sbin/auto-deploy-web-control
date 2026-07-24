@@ -5,11 +5,14 @@ action="${1:-}"
 unit="auto-deploy-web.service"
 
 case "${action}" in
+  check-permission)
+    echo "OK"
+    ;;
   start|stop|restart|status|is-active|reset-failed)
     systemctl "${action}" "${unit}"
     ;;
   *)
-    echo "Usage: auto-deploy-web-control {start|stop|restart|status|is-active|reset-failed}" >&2
+    echo "Usage: auto-deploy-web-control {check-permission|start|stop|restart|status|is-active|reset-failed}" >&2
     exit 2
     ;;
 esac

@@ -82,6 +82,8 @@ bash -n ops/usr/local/bin/auto-deploy-project-runner \
   ops/usr/local/sbin/auto-reboot-deploy.sh
 sudo visudo -cf ops/sudoers.d/auto-deploy-project-systemd
 sudo visudo -cf ops/sudoers.d/auto-deploy-web-systemd
+sudo -n /usr/local/sbin/auto-deploy-project-control check-permission
+sudo -n /usr/local/sbin/auto-deploy-web-control check-permission
 systemd-analyze verify \
   ops/etc/systemd/system/auto-deploy-project@.service \
   ops/etc/systemd/system/auto-deploy-web.service \
@@ -97,3 +99,8 @@ journalctl -u auto-deploy-web.service -n 100 --no-pager
 journalctl -u 'auto-deploy-project@{id}-{project_key}.service' -n 100 --no-pager
 systemd-cgls /system.slice/auto-deploy-project@{id}-{project_key}.service
 ```
+
+
+## sudoers 권한 검사 방식
+
+Auto Deploy 설치 상태 화면은 `/etc/sudoers.d` 파일을 PHP에서 직접 읽어 설치 여부를 판단하지 않습니다. sudoers 파일은 `root:root 0440` 권한을 유지해야 하며, appuser가 디렉터리를 탐색하지 못해도 정상입니다. 대신 부작용 없는 `sudo -n /usr/local/sbin/auto-deploy-project-control check-permission`, `sudo -n /usr/local/sbin/auto-deploy-web-control check-permission` 실행 결과로 NOPASSWD 권한을 검증합니다.

@@ -6,6 +6,7 @@ use App\Core\Response;
 use App\Repositories\DeployHistoryRepository;
 use App\Repositories\DeployProjectRepository;
 use App\Repositories\DeployVersionRepository;
+use App\Services\AppVersionService;
 use App\Services\DeployService;
 
 final class DashboardController
@@ -42,6 +43,7 @@ final class DashboardController
             'isDeploying' => (bool) ($deploymentStatus['deploying'] ?? false),
             'deploymentStatus' => $deploymentStatus,
             'flashError' => $flashError,
+            'appCommitHash' => (new AppVersionService())->currentCommitHash(),
         ]);
     }
 }

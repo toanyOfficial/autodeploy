@@ -531,10 +531,12 @@ test -d /var/lib/auto_deploy
 test -f /var/log/auto_deploy/reboot-deploy.log
 sudo visudo -cf /etc/sudoers.d/auto-reboot-deploy
 sudo -u appuser -H sudo -n -l /usr/local/sbin/auto-reboot-deploy.sh
+sudo -u appuser -H sudo -n /usr/local/sbin/auto-deploy-project-control check-permission
+sudo -u appuser -H sudo -n /usr/local/sbin/auto-deploy-web-control check-permission
 sudo systemctl daemon-reload
 ```
 
-관리자 화면의 `설치 상태 다시 확인` 버튼에서도 동일한 필수 항목을 확인할 수 있습니다.
+관리자 화면의 `설치 상태 다시 확인` 버튼에서도 동일한 필수 항목을 확인할 수 있습니다. sudoers 파일은 root:root 0440 권한을 유지하며, 화면은 `/etc/sudoers.d` 파일 직접 조회가 아니라 위 `sudo -n ... check-permission` 명령의 성공 여부로 권한을 판단합니다.
 
 ## 4. 동작 흐름
 
