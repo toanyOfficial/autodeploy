@@ -219,15 +219,6 @@ final class ApiController
         }
 
         $pidFile = $root . '/.autodeploy.pid';
-        if (file_put_contents($pidFile, (string) getmypid()) === false) {
-            @unlink($scriptFile);
-            Response::json([
-                'success' => false,
-                'message' => 'Auto Deploy PID 파일을 저장할 수 없어 self reboot를 시작할 수 없습니다.',
-            ], 500);
-            return;
-        }
-
         $restartScript = $this->selfRebootScript($root, $port, $phpBinary, $logFile, $scriptFile, $pidFile);
         if (file_put_contents($scriptFile, $restartScript) === false || !chmod($scriptFile, 0700)) {
             @unlink($scriptFile);
@@ -305,35 +296,9 @@ final class ApiController
             'script_file=' . escapeshellarg($scriptFile),
             'root_dir=' . escapeshellarg($root),
             'port=' . escapeshellarg((string) $port),
-            'php_binary=' . escapeshellarg($phpBinary),
-            'pid_file=' . escapeshellarg($pidFile),
-            'close_inherited_file_descriptors() {',
-            '  local fd_path fd',
-            '  for fd_path in /proc/$$/fd/*; do',
-            '    fd=${fd_path##*/}',
-            '    case "$fd" in 0|1|2|*[!0-9]*) continue ;; esac',
-            '    eval "exec ${fd}>&-" 2>/dev/null || true',
-            '  done',
-            '}',
-            'close_inherited_file_descriptors',
-            'log() { echo "[$(date -Is)] $*"; }',
+            'web_control=/usr/local/sbin/auto-deploy-web-control',
             'cleanup() { rm -f "$script_file"; }',
-            '# Self reboot must only stop the Auto Deploy process recorded in its pidfile.',
-            '# Do not discover or kill by port: child projects may temporarily inherit descriptors from older versions.',
-            'release_auto_deploy_listener() {',
-            '  local pid',
-            '  if [ ! -f "${pid_file}" ]; then log "pidfile missing: ${pid_file}"; return 1; fi',
-            '  pid="$(cat "${pid_file}" 2>/dev/null | tr -cd "0-9")"',
-            '  if [ -z "${pid}" ]; then log "pidfile has no valid pid: ${pid_file}"; return 1; fi',
-            '  log "terminate Auto Deploy pidfile pid: ${pid}"',
-            '  kill "${pid}" 2>/dev/null || true',
-            '  for attempt in $(seq 1 15); do',
-            '    if ! kill -0 "${pid}" 2>/dev/null; then return 0; fi',
-            '    sleep 1',
-            '  done',
-            '  log "force terminate Auto Deploy pidfile pid: ${pid}"',
-            '  kill -9 "${pid}" 2>/dev/null || true',
-            '}',
+            'log() { echo "[$(date -Is)] $*"; }',
             'trap cleanup EXIT',
             'sleep 2',
             'log "self reboot start root=${root_dir} port=${port}"',
@@ -343,13 +308,8 @@ final class ApiController
             'log "git reset --hard origin/main"',
             'git reset --hard origin/main',
             'if [ -d .next ]; then log "rm -rf .next"; rm -rf .next; fi',
-            'log "release Auto Deploy listener by pidfile ${pid_file}"',
-            'release_auto_deploy_listener',
-            'log "start php built-in server"',
-            'nohup "$php_binary" -S "0.0.0.0:${port}" -t public > app.log 2>&1 < /dev/null &',
-            'server_pid=$!',
-            'echo "${server_pid}" > "${pid_file}"',
-            'log "started pid=${server_pid}"',
+            'log "restart Auto Deploy web via systemd"',
+            'sudo -n "$web_control" restart',
             'for attempt in $(seq 1 30); do',
             '  if curl -fsS --max-time 2 "http://127.0.0.1:${port}/login" >/dev/null 2>&1; then log "ready attempt=${attempt}"; exit 0; fi',
             '  sleep 1',

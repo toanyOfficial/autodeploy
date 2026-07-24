@@ -86,6 +86,7 @@ LOCK_FILE="/run/dandorak_post_reboot.lock"
 MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
+AUTO_DEPLOY_WEB_SERVICE="auto-deploy-web.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
 
 mkdir -p "${LOG_DIR}" "${STATE_DIR}"
@@ -171,15 +172,9 @@ git reset --hard origin/main
 if [ -d .next ]; then rm -rf .next; fi
 "
 
-log "Auto Deploy 9090 포트를 해제합니다."
-fuser -k 9090/tcp 2>/dev/null || true
-sleep 1
-
-log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc "
-cd '${AUTO_DEPLOY_DIR}'
-nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-"
+log "Auto Deploy web systemd 서비스를 재시작합니다."
+systemctl daemon-reload
+systemctl restart "${AUTO_DEPLOY_WEB_SERVICE}"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
@@ -314,6 +309,7 @@ LOCK_FILE="/run/dandorak_post_reboot.lock"
 MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
+AUTO_DEPLOY_WEB_SERVICE="auto-deploy-web.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
 
 mkdir -p "${LOG_DIR}" "${STATE_DIR}"
@@ -399,15 +395,9 @@ git reset --hard origin/main
 if [ -d .next ]; then rm -rf .next; fi
 "
 
-log "Auto Deploy 9090 포트를 해제합니다."
-fuser -k 9090/tcp 2>/dev/null || true
-sleep 1
-
-log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc "
-cd '${AUTO_DEPLOY_DIR}'
-nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-"
+log "Auto Deploy web systemd 서비스를 재시작합니다."
+systemctl daemon-reload
+systemctl restart "${AUTO_DEPLOY_WEB_SERVICE}"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
@@ -462,7 +452,60 @@ KillMode=process
 WantedBy=multi-user.target
 ```
 
-### 2.4 sudoers
+
+### 2.4 `/etc/systemd/system/auto-deploy-web.service`
+
+```ini
+[Unit]
+Description=Auto Deploy web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+WorkingDirectory=/srv/auto_deploy
+ExecStart=/usr/bin/php -S 0.0.0.0:9090 -t public
+Restart=always
+RestartSec=3
+KillMode=control-group
+SyslogIdentifier=auto-deploy-web
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 2.5 `/etc/systemd/system/auto-deploy-project@.service`
+
+```ini
+[Unit]
+Description=Auto Deploy managed project %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+EnvironmentFile=/etc/auto_deploy/projects/%i.env
+ExecStart=/usr/local/bin/auto-deploy-project-runner %i
+WorkingDirectory=/
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=30
+SyslogIdentifier=auto-deploy-project-%i
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 2.6 project runner/control/sudoers
+
+프로젝트별 장기 실행 명령은 DeployService가 `/etc/auto_deploy/projects/{id}-{project_key}.env`에 기록하고 `auto-deploy-project-control` wrapper를 통해 `systemctl`로만 제어합니다. 로그는 `journalctl -u auto-deploy-project@{id}-{project_key}.service`로 확인합니다.
+
+### 2.7 sudoers
 
 `/etc/sudoers.d/auto-reboot-deploy`:
 
@@ -478,6 +521,11 @@ appuser ALL=(root) NOPASSWD: /usr/local/sbin/auto-reboot-deploy.sh
 test -x /usr/local/sbin/auto-reboot-deploy.sh
 test -x /usr/local/sbin/dandorak-post-reboot.sh
 test -f /etc/systemd/system/dandorak-post-reboot.service
+test -f /etc/systemd/system/auto-deploy-web.service
+test -f /etc/systemd/system/auto-deploy-project@.service
+test -x /usr/local/sbin/auto-deploy-web-control
+test -x /usr/local/sbin/auto-deploy-project-control
+test -x /usr/local/bin/auto-deploy-project-runner
 test -d /var/log/auto_deploy
 test -d /var/lib/auto_deploy
 test -f /var/log/auto_deploy/reboot-deploy.log
@@ -500,14 +548,14 @@ sudo systemctl daemon-reload
 6. 부팅 후 `/usr/local/sbin/dandorak-post-reboot.sh` 실행
 7. `/srv/dandorak/start-database.sh` 실행
 8. DB Ready Check: 최대 120초 동안 2초 간격으로 Auto Deploy `.env`를 로드한 PHP PDO `SELECT 1` 연결 테스트 재시도
-9. Auto Deploy를 appuser 권한으로 실행
+9. `auto-deploy-web.service`를 systemd로 restart
 10. `php scripts/deploy_all_stable.php` 실행
 11. 내부 PHP 코드가 `DeployService::deployStable()`을 활성 프로젝트별로 순차 호출
 12. Caddy validate
 13. Caddy reload
 14. `dandorak-post-reboot.service` disable/reset-failed
 
-post-reboot script에는 프로젝트별 `git pull`, `npm ci`, `npm run build`, `pm2 restart` 명령을 작성하지 않습니다. 프로젝트별 배포는 Auto Deploy 내부 `DeployService::deployStable()`만 재사용합니다.
+post-reboot script에는 프로젝트별 `git pull`, `npm ci`, `npm run build`, `pm2 restart` 명령을 작성하지 않습니다. 장기 실행되는 Auto Deploy web과 프로젝트 서버 프로세스는 각각 `auto-deploy-web.service`, `auto-deploy-project@.service` cgroup에서 실행됩니다. 프로젝트별 배포는 Auto Deploy 내부 `DeployService::deployStable()`만 재사용합니다.
 
 ## 5. 로그 확인
 

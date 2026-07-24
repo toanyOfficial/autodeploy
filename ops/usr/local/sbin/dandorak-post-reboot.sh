@@ -9,6 +9,7 @@ LOCK_FILE="/run/dandorak_post_reboot.lock"
 MAX_LOG_LINES=400
 AUTO_DEPLOY_DIR="/srv/auto_deploy"
 POST_REBOOT_SERVICE="dandorak-post-reboot.service"
+AUTO_DEPLOY_WEB_SERVICE="auto-deploy-web.service"
 AUTO_DEPLOY_URL="http://127.0.0.1:9090/login"
 
 mkdir -p "${LOG_DIR}" "${STATE_DIR}"
@@ -93,15 +94,9 @@ git reset --hard origin/main
 if [ -d .next ]; then rm -rf .next; fi
 "
 
-log "Auto Deploy 9090 포트를 해제합니다."
-fuser -k 9090/tcp 2>/dev/null || true
-sleep 1
-
-log "Auto Deploy를 appuser 권한으로 실행합니다."
-sudo -u appuser -H bash -lc "
-cd '${AUTO_DEPLOY_DIR}'
-nohup php -S 0.0.0.0:9090 -t public > app.log 2>&1 &
-"
+log "Auto Deploy web systemd 서비스를 재시작합니다."
+systemctl daemon-reload
+systemctl restart "${AUTO_DEPLOY_WEB_SERVICE}"
 
 log "Auto Deploy 준비 상태를 대기합니다."
 for attempt in $(seq 1 60); do
