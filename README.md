@@ -34,7 +34,7 @@ php scripts/test_db_connection.php
 - `POST /projects/{projectId}/deploy/versions/{versionId}`: 특정 등록 버전의 Commit Hash 기준으로 배포합니다.
 - `GET /api/deploy/status`: 전역 배포 진행 여부를 확인합니다.
 
-배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`, `node_app`)과 프로젝트 설정값(`server_path`, `port`, `branch_name`)에 따라 코드 내부 템플릿으로 결정됩니다. `nextjs_bun` 배포는 운영 프로젝트에서 먼저 `git fetch --all`을 실행한 뒤 target commit을 해시로 확정하고, `/srv/.auto-deploy-builds/{project-key}/{deploy-id}` 아래의 임시 Git worktree에서 `.env`, `.env.local`, `.env.production`, `.env.production.local`을 심볼릭 링크로 연결한 뒤 `bun install --frozen-lockfile`을 먼저 시도하고 lockfile 불일치 등으로 실패하면 운영 프로젝트를 변경하지 않는 candidate worktree 안에서만 `bun install`로 재시도한 뒤 `bun run build`를 수행합니다. 임시 worktree의 `.next` 및 Next.js manifest 검증이 끝나기 전에는 기존 supervisor, 운영 포트, 운영 프로젝트의 `.next`, 운영 commit을 변경하지 않으므로 빌드 실패 시 기존 서비스/commit/.next가 유지됩니다. 후보 빌드가 성공하면 성공한 `.next`와 candidate `node_modules`를 운영 프로젝트 내부 `.next.candidate-{deploy-id}` / `node_modules.candidate-{deploy-id}`로 복사하고, 그 후에만 기존 서비스를 종료한 뒤 `git reset --hard {target_commit}`, 기존 `.next`의 `.next.rollback-{deploy-id}` rename, candidate `.next`와 candidate `node_modules`의 원자적 rename, 기존 `nohup env ... PORT={port} bun run start -H 0.0.0.0 > app.log 2>&1 < /dev/null &` 시작, `{port}` LISTEN 확인, `http://127.0.0.1:{port}/` HTTP 확인을 순서대로 수행합니다. 운영 전환 중 실패하면 가능한 범위에서 기존 commit, rollback `.next`, rollback `node_modules`, 기존 start 명령으로 서비스를 복구하고 rollback 결과를 리포트에 남깁니다. 임시 worktree와 candidate 디렉터리는 항상 정리하며, 오래된 임시 빌드 디렉터리, `.next.rollback-*`, `node_modules.rollback-*`은 24시간 이후 정리합니다. Auto Deploy 9090 포트는 프로젝트 배포 대상으로 사용할 수 없으며 종료하지 않습니다. `node_app` 배포는 Express/Koa/Fastify 같은 일반 Node 서버용 런타임입니다. 운영 프로젝트를 멈추기 전에 임시 Git worktree에서 `.env`, `.env.local`, `.env.production`, `.env.production.local`을 연결하고 lockfile 기준으로 패키지 매니저(`bun`, `pnpm`, `yarn`, `npm`)를 자동 선택해 의존성을 설치합니다. `scripts.build`가 있으면 candidate worktree 안에서만 빌드하고, 성공한 `node_modules`와 일반 빌드 산출물(`dist`, `build`, `out`)을 운영 경로의 candidate 디렉터리로 복사합니다. 이후 기존 서비스와 포트를 종료한 뒤 운영 commit, `node_modules`, 빌드 산출물을 교체하고 `PORT={port} HOST=0.0.0.0 HOSTNAME=0.0.0.0` 환경으로 `scripts.start`를 실행합니다. `scripts.start`가 없으면 `server.js`, `app.js`, `index.js` 순서로 엔트리포인트를 찾아 `node`로 실행합니다. 포트 LISTEN, HTTP 응답, `EADDRINUSE` 로그 검증에 실패하면 가능한 범위에서 이전 commit, 이전 `node_modules`, 이전 빌드 산출물로 rollback합니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. 배포 상태 조회는 12분 이상 남은 `running` 이력을 stale 실패로 전환하고 lock/running 상세 상태를 반환합니다.
+배포 명령어 셋은 DB에 저장하지 않으며, `runtime_type` 값(`python_static`, `nextjs_bun`, `node_app`)과 프로젝트 설정값(`server_path`, `port`, `branch_name`)에 따라 코드 내부 템플릿으로 결정됩니다. 프로젝트 장기 실행 프로세스는 `nohup`이 아니라 `auto-deploy-project@.service` systemd template unit이 직접 관리합니다. DeployService는 배포 전환 시 프로젝트별 환경 파일(`/etc/auto_deploy/projects/{id}-{project_key}.env`)을 갱신하고 `auto-deploy-project-control`을 통해 `systemctl stop/restart/is-active/reset-failed`만 호출합니다. 로그 확인은 `app.log`가 아니라 `journalctl -u auto-deploy-project@{id}-{project_key}.service`를 기준으로 수행합니다. `nextjs_bun` 배포는 candidate worktree에서 의존성 설치와 build를 완료한 뒤 systemd 서비스를 멈추고 운영 commit, `.next`, `node_modules`를 원자적으로 교체한 다음 systemd로 재시작합니다. `python_static`은 운영 경로를 target ref로 갱신한 뒤 `python3 -m http.server` 실행 명령을 template unit에 기록하고 systemd로 재시작합니다. `node_app`도 기존 안전 배포/rollback 흐름을 유지하되 장기 실행 주체는 systemd unit입니다. 포트 LISTEN, HTTP 응답, journal 기반 `EADDRINUSE` 확인에 실패하면 가능한 범위에서 이전 commit과 산출물을 복구하고 systemd로 이전 서비스를 재시작합니다. 프로젝트별 배포는 최대 10분으로 제한되며 개별 명령은 최대 5분으로 제한됩니다. 배포 상태 조회는 12분 이상 남은 `running` 이력을 stale 실패로 전환하고 lock/running 상세 상태를 반환합니다.
 
 ## 배포 전 검증
 
@@ -70,14 +70,24 @@ python3 scripts/check_deployservice_methods.py
 ```bash
 sudo install -m 0755 ops/usr/local/sbin/auto-reboot-deploy.sh /usr/local/sbin/auto-reboot-deploy.sh
 sudo install -m 0755 ops/usr/local/sbin/dandorak-post-reboot.sh /usr/local/sbin/dandorak-post-reboot.sh
+sudo install -m 0755 ops/usr/local/bin/auto-deploy-project-runner /usr/local/bin/auto-deploy-project-runner
+sudo install -m 0755 ops/usr/local/sbin/auto-deploy-project-control /usr/local/sbin/auto-deploy-project-control
+sudo install -m 0755 ops/usr/local/sbin/auto-deploy-web-control /usr/local/sbin/auto-deploy-web-control
 sudo install -d -m 0755 -o appuser -g appuser /var/log/auto_deploy
+sudo install -d -m 0755 -o appuser -g appuser /var/lib/auto_deploy
 sudo touch /var/log/auto_deploy/reboot-deploy.log
 sudo chown appuser:appuser /var/log/auto_deploy/reboot-deploy.log
 sudo chmod 0664 /var/log/auto_deploy/reboot-deploy.log
 sudo install -m 0644 ops/etc/systemd/system/dandorak-post-reboot.service /etc/systemd/system/dandorak-post-reboot.service
+sudo install -m 0644 ops/etc/systemd/system/auto-deploy-web.service /etc/systemd/system/auto-deploy-web.service
+sudo install -m 0644 ops/etc/systemd/system/auto-deploy-project@.service /etc/systemd/system/auto-deploy-project@.service
 sudo install -m 0440 ops/sudoers.d/auto-reboot-deploy /etc/sudoers.d/auto-reboot-deploy
+sudo install -m 0440 ops/sudoers.d/auto-deploy-project-systemd /etc/sudoers.d/auto-deploy-project-systemd
+sudo install -m 0440 ops/sudoers.d/auto-deploy-web-systemd /etc/sudoers.d/auto-deploy-web-systemd
 sudo systemctl daemon-reload
 ```
+
+`auto-reboot-deploy.sh`는 `/var/lib/auto_deploy/reboot-restore.pending` 1회 실행 마커를 만든 뒤 서비스를 enable 하며, 두 운영 스크립트는 `flock`으로 중복 실행을 차단합니다. 프로젝트 프로세스는 `auto-deploy-project@.service` 아래에 남으므로 post-reboot oneshot cgroup에 장기 실행 프로세스가 남지 않습니다. `dandorak-post-reboot.sh`는 시작 즉시 마커를 소비하고 서비스를 disable/reset-failed 하므로, 실제 재부팅 없는 재시작이나 반복 start 루프에서는 전체 배포를 다시 실행하지 않습니다.
 
 `dandorak-post-reboot.sh`는 프로젝트별 배포 명령을 직접 실행하지 않고, appuser 권한으로 `php scripts/deploy_all_stable.php`를 호출합니다. 해당 CLI는 `StableDeploymentBatchService`를 통해 활성 프로젝트 목록을 조회하고 각 프로젝트에 대해 `DeployService::deployStable()`을 순차 호출합니다.
 

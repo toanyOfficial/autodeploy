@@ -1,0 +1,20 @@
+[Unit]
+Description=Auto Deploy managed project %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+EnvironmentFile=/etc/auto_deploy/projects/%i.env
+ExecStart=/usr/local/bin/auto-deploy-project-runner %i
+WorkingDirectory=/
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=30
+SyslogIdentifier=auto-deploy-project-%i
+
+[Install]
+WantedBy=multi-user.target

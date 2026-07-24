@@ -71,6 +71,7 @@ $siteUrlForProject = static function (array $project): ?string {
             <p class="eyebrow">Auto Deploy</p>
             <h1>공주님의 배포 대시보드</h1>
             <p class="muted">실무자는 프로젝트를 확인하고, 필요한 배포 버튼만 누르면 돼요.</p>
+            <p class="muted app-revision">현재 실행 커밋: <code><?= htmlspecialchars($appCommitHash ?? 'unknown', ENT_QUOTES, 'UTF-8') ?></code></p>
         </div>
     </header>
 
